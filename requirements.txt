@@ -1,0 +1,10 @@
+# 建议使用 Python 3.11 / 3.12（64 位），OCR 依赖在该版本最齐全
+# pip install -r requirements.txt
+
+PySide6>=6.5
+mss>=9.0
+Pillow>=10.0
+numpy>=1.24
+rapidocr_onnxruntime>=1.3
+keyboard>=0.13.5
+pyinstaller>=6.0

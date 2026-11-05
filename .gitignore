@@ -1,0 +1,24 @@
+# 打包产物（几百 MB，不进仓库）
+dist/
+build/
+*.spec
+
+# 安装程序的临时 payload：由 tools/make_payload.py 现生成
+installer/payload.zip
+installer/payload_info.json
+
+# 运行期文件
+install.log
+selftest.log
+selftest.png
+error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 工具与个人配置
+.workbuddy/
+.vscode/
+.env
