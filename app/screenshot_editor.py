@@ -11,12 +11,15 @@
 坐标：窗口内一律用 Qt 逻辑像素（主程序关了 high-DPI，正常 == 物理像素），
 合成输出用物理像素；两者靠 ui_scale() 换算，setWindow/setViewport 一步对齐。
 """
+import ctypes
 import math
 import os
+import sys
 import time
 
 from PySide6.QtCore import (
-    QEventLoop, QPoint, QPointF, QRect, QRectF, Qt, QThread, QTimer, Signal,
+    QEvent, QEventLoop, QPoint, QPointF, QRect, QRectF, Qt, QThread, QTimer,
+    Signal,
 )
 from PySide6.QtGui import (
     QColor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen,
@@ -35,6 +38,24 @@ from .ui_shell import ShellWindow
 
 TIP = "拖动绘制   ·   Ctrl+Z 撤销   ·   Ctrl+S 保存   ·   Enter 完成   ·   Esc 取消"
 SETTLE_MS = 110
+
+# --- Windows Z 序 ---------------------------------------------------------
+# 编辑器是全屏 topmost 窗口，工具条 / 选项条 / 表情板 / OCR 面板是另外几个
+# topmost 顶层窗口。只靠 raise_() 不够：用户点过附属窗口再点回画布时，
+# Windows 会把编辑器提到 topmost 组最顶，把整条工具条盖住（V4.8 实测的
+#「点一下工具条就消失」）。把附属窗口的 owner 设成编辑器之后，Windows
+# 从窗口管理器层面保证 owned window 永远在 owner 之上，激活 owner 也不会
+# 反过来压住它。tools/check_zorder.py 用 WindowFromPoint 做回归验证。
+if sys.platform == "win32":
+    from ctypes import wintypes
+    _USER32 = ctypes.windll.user32
+    _SET_LONG = (getattr(_USER32, "SetWindowLongPtrW", None)
+                 or _USER32.SetWindowLongW)
+    _SET_LONG.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+    _SET_LONG.restype = ctypes.c_void_p
+    _GWLP_HWNDPARENT = -8
+else:
+    _USER32 = None
 
 
 def _pil_to_pixmap(img) -> QPixmap:
@@ -201,6 +222,7 @@ class ScreenshotEditor(QWidget):
         self._toast_label = None
         self._toast_timer = None
         self._busy = False
+        self._raise_pending = False
 
         self._mosaic_pm = QPixmap(screen_pm.size())
         self._mosaic_pm.fill(Qt.transparent)
@@ -216,13 +238,18 @@ class ScreenshotEditor(QWidget):
         self._picker.picked.connect(self._on_sticker)
 
     # ---------- 对外 ----------
-    def exec(self):
+    def show_editor(self):
+        """把编辑态摆上屏幕（不进局部事件循环，自检脚本也走这条真实路径）。"""
         self.show()
         self.raise_()
         self.activateWindow()
+        self._attach_all()
         self._place_children()
-        self._toolbar.show()
+        self._show_child(self._toolbar)
         self._set_tool("rect")
+
+    def exec(self):
+        self.show_editor()
         self._loop = QEventLoop()
         if self._result is None:
             self._loop.exec()
@@ -274,6 +301,80 @@ class ScreenshotEditor(QWidget):
         if self._text_edit is not None:
             self._text_edit.hide()
 
+    # ---------- 层级 ----------
+    def _attach(self, widget):
+        """把浮窗登记为本编辑器的 owned window（仅 Windows）。
+
+        winId() 会强制创建原生 HWND，所以隐藏着的窗口也能提前挂好；
+        Qt 在某些 show / raise 路径上会重写 owner，因此每次显示时都重挂一遍。
+        """
+        if widget is None or _USER32 is None:
+            return
+        try:
+            owner = int(self.winId())
+            child = int(widget.winId())
+            if owner and child and owner != child:
+                _SET_LONG(child, _GWLP_HWNDPARENT, ctypes.c_void_p(owner))
+        except Exception:
+            pass
+
+    def _attach_all(self):
+        for w in (self._toolbar, self._options, self._picker, self._ocr_panel):
+            self._attach(w)
+
+    def _pin(self, widget):
+        """挂 owner + 置顶，再复查一次 owner。
+
+        顺序很关键：Qt 在窗口首次 show() / 某些 raise 路径上会重建原生
+        HWND 或把 owner 清成 0（实测 show 之后 GetWindow(GW_OWNER) 归零），
+        所以显示前挂的那次不算数，必须在显示之后再挂一遍。
+        """
+        if widget is None:
+            return
+        self._attach(widget)
+        widget.raise_()
+        self._attach(widget)
+
+    def _show_child(self, widget):
+        if widget is None:
+            return
+        widget.show()
+        self._pin(widget)
+
+    def _raise_children(self):
+        """兜底：前台切换 / 系统弹窗 / 点击画布之后，把可见浮窗捞回最上层。"""
+        for w in (self._toolbar, self._options, self._picker, self._ocr_panel):
+            if w is not None and w.isVisible():
+                self._pin(w)
+
+    def _resume(self):
+        """从文件对话框 / 截长图 / 系统弹窗回来后恢复整组浮窗。
+
+        这类窗口往往是 parent=None 的模态框，关闭后前台不一定回到编辑器，
+        所以必须重新激活并走一遍 _show_child（它会重建 owner 顺序）。
+        """
+        self.show()
+        self.activateWindow()
+        self._place_children()
+        self._show_child(self._toolbar)
+        if self._tool in DRAW_TOOLS:
+            self._show_child(self._options)
+
+    def event(self, ev):
+        # 只监听激活，不监听 ZOrderChange：raise_() 自己会触发后者，
+        # 用它做兜底会变成「raise -> 事件 -> 再 raise」的死循环。
+        if (ev.type() == QEvent.WindowActivate and self.isVisible()
+                and not self._raise_pending):
+            self._raise_pending = True
+            # 延后一拍，等 Windows 把本次前台切换的 Z 序调整完
+            QTimer.singleShot(0, self._raise_now)
+        return super().event(ev)
+
+    def _raise_now(self):
+        self._raise_pending = False
+        if self.isVisible():
+            self._raise_children()
+
     @staticmethod
     def _settle(ms):
         deadline = time.monotonic() + ms / 1000.0
@@ -288,13 +389,14 @@ class ScreenshotEditor(QWidget):
         self._tool = tool
         self._toolbar.set_tool(tool)
         drawing = tool in DRAW_TOOLS
-        self._options.setVisible(drawing and self.isVisible())
-        if drawing:
+        if drawing and self.isVisible():
             self._options.set_mode(tool)
             self._place_children()
+            self._show_child(self._options)
+        else:
+            self._options.hide()
         if tool == "sticker":
-            self._picker.show()
-            self._picker.raise_()
+            self._show_child(self._picker)
         else:
             self._picker.hide()
         self.setCursor(Qt.CrossCursor if tool not in ("ocr", "long")
@@ -360,11 +462,7 @@ class ScreenshotEditor(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             None, "保存截图", os.path.join(base, name), "PNG 图片 (*.png)")
         if not path:
-            self.show()
-            self._place_children()
-            self._toolbar.show()
-            if self._tool in DRAW_TOOLS:
-                self._options.show()
+            self._resume()
             return
         if not path.lower().endswith(".png"):
             path += ".png"
@@ -407,8 +505,7 @@ class ScreenshotEditor(QWidget):
                     self._geom.right() - self._ocr_panel.width() - 8))
         y = max(self._geom.top() + 8, g.top() + 16)
         self._ocr_panel.move(x, y)
-        self._ocr_panel.show()
-        self._ocr_panel.raise_()
+        self._show_child(self._ocr_panel)
 
     # ---------- 截长图 ----------
     def _run_long(self):
@@ -425,9 +522,7 @@ class ScreenshotEditor(QWidget):
             img, used = None, 0
         self._busy = False
         self._toolbar.set_busy(False)
-        self.show()
-        self._place_children()
-        self._toolbar.show()
+        self._resume()
         if img is None:
             self._toast("截长图没成功，可以再试一次")
             return
@@ -604,6 +699,8 @@ class ScreenshotEditor(QWidget):
 
     # ---------- 鼠标 ----------
     def mousePressEvent(self, event):
+        # 点画布会把编辑器激活到前台，顺手把浮窗捞回最上层
+        self._raise_children()
         if event.button() == Qt.RightButton:
             self._finish("cancel")
             return

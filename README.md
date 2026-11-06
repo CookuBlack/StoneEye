@@ -3,7 +3,7 @@
 框选屏幕任意一块 → OCR 认出画面里的「景别 / 运镜」→ 按句子切分、上色 → 把标注贴回原处并跟着走。
 面向小说转漫画的分镜标注：看得懂「全景 / 中景 / 特写 / 推 / 拉 / 摇 / 移」，也能自己加词表。
 
-当前版本 **4.8.0**。
+当前版本 **4.8.1**。
 
 ---
 
@@ -38,6 +38,9 @@
 - **完成**＝复制到剪贴板并生成置顶贴图（保留原来的 OCR 景别/运镜标注链路）；
   **钉在桌面**＝只生成置顶贴图；**发送**＝复制到剪贴板，去聊天窗口 `Ctrl+V`；
   **保存**＝写出 PNG；**取消**＝丢弃。
+- 工具条、选项条、表情板都登记为编辑器的 owned window，并且不抢键盘焦点：
+  点画布绘制、换颜色、切工具、弹窗返回之后都稳定浮在最上层（4.8.1 修复了
+  「点一下工具条就消失」）。
 - 想要原来「框完立刻贴图」的一步式操作，用托盘菜单「快速贴图（跳过标注）」。
 - Windows 没有通用的「发给当前聊天窗口」接口，所以「发送」降级为复制图片到剪贴板。
 
@@ -90,7 +93,7 @@ python tools\icon_from_image.py            :: -> assets/app.png + assets/app.ico
 ```bat
 build.bat onedir           :: 文件夹版 -> dist\StoneEye\
 build.bat onefile          :: 单文件版
-build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.8.0.exe
+build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.8.1.exe
 ```
 
 `build_installer.bat` 依赖上一步的 `dist\StoneEye`：它会把那份产物压成
@@ -101,7 +104,7 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.8.0.
 
 ## 安装
 
-双击 `StoneEye_安装程序_v4.8.0.exe`：
+双击 `StoneEye_安装程序_v4.8.1.exe`：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\StoneEye`，免管理员）；
 2. 勾快捷方式 / 开机自启；
@@ -113,8 +116,8 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.8.0.
 ### 静默安装 / 卸载（部署用）
 
 ```bat
-StoneEye_安装程序_v4.8.0.exe --silent --dir "D:\Apps\StoneEye"
-StoneEye_安装程序_v4.8.0.exe --silent --no-desktop --no-startmenu --autostart
+StoneEye_安装程序_v4.8.1.exe --silent --dir "D:\Apps\StoneEye"
+StoneEye_安装程序_v4.8.1.exe --silent --no-desktop --no-startmenu --autostart
 StoneEye.exe --uninstall --quiet
 ```
 
@@ -125,6 +128,7 @@ StoneEye.exe --uninstall --quiet
 ```bat
 python sr_check_panel.py                        :: 面板离屏校验，应「全部通过」
 python sr_check_editor.py                       :: 编辑态 / 工具栏 / 长图拼接校验
+python tools/check_zorder.py --assert           :: 真实桌面验证浮窗不会被编辑器盖住
 dist\StoneEye\StoneEye.exe --smoke              :: 打包后验证延迟导入模块齐全
 dist\StoneEye\StoneEye.exe --selftest           :: 打包后验证模型可用
 ```

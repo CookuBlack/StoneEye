@@ -33,6 +33,13 @@ STICKERS = (
     "❤️", "🔥", "⭐", "✨", "💡", "❓", "❗", "✅", "❌", "💯",
 )
 
+# 这几个浮窗只提供按钮，不需要键盘焦点。设成不抢焦点后，点击它们不会
+# 触发一次前台窗口切换 —— 既保住编辑器的 Esc / Ctrl+Z 快捷键，也少一次
+# 让 Windows 重排 topmost Z 序的机会（V4.8 工具条「点一下就消失」的根源）。
+# OCR 结果面板要能选中文本复制，所以**不**用这组 flags。
+FLOAT_FLAGS = (Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+               | Qt.WindowDoesNotAcceptFocus)
+
 
 class ToolButton(QAbstractButton):
     """自绘图标按钮：悬停有一层淡底，选中工具再叠一层亮底。"""
@@ -97,8 +104,8 @@ class CaptureToolbar(ShellWindow):
     actionTriggered = Signal(str)
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint
-                         | Qt.WindowStaysOnTopHint)
+        super().__init__(parent, FLOAT_FLAGS)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self._buttons = {}
         self._active = None
 
@@ -201,8 +208,8 @@ class OptionsBar(ShellWindow):
     sizeChanged = Signal(int)
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint
-                         | Qt.WindowStaysOnTopHint)
+        super().__init__(parent, FLOAT_FLAGS)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.color = COLORS[0][0]
         self.pen_width = 3
         self.font_size = 20
@@ -298,8 +305,8 @@ class StickerPicker(ShellWindow):
     picked = Signal(str)
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint
-                         | Qt.WindowStaysOnTopHint)
+        super().__init__(parent, FLOAT_FLAGS)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         lay = QGridLayout(self)
         lay.setContentsMargins(self._spad, self._spad, self._spad, self._spad)
         lay.setSpacing(round(3 * self._scale))

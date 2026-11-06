@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-StoneEye —— Windows 截图 / 标注 / OCR 整句标注 + 贴图工具（V4.8）
+StoneEye —— Windows 截图 / 标注 / OCR 整句标注 + 贴图工具（V4.8.1）
 启动入口。
 
 【交互模型】
@@ -204,6 +204,28 @@ def _smoke() -> int:
         except Exception as exc:
             bad.append(name)
             lines.append("FAIL %s : %s" % (name, exc))
+
+    # V4.8.1：浮窗层级修复依赖 Win32 ctypes 和新增的几个方法，冻结版也要确认
+    try:
+        from PySide6.QtCore import Qt
+        from app import capture_toolbar as tb
+        from app import screenshot_editor as se
+        extra = (
+            (se._USER32 is not None, "Win32 user32"),
+            (callable(getattr(se, "_SET_LONG", None)), "SetWindowLongPtr"),
+            (bool(tb.FLOAT_FLAGS & Qt.WindowDoesNotAcceptFocus), "浮窗不抢焦点"),
+            (all(hasattr(se.ScreenshotEditor, n) for n in (
+                "_attach", "_pin", "_show_child", "_raise_children",
+                "_resume", "show_editor")), "浮窗层级方法"),
+        )
+        for ok, label in extra:
+            lines.append(("OK   " if ok else "FAIL ") + label)
+            if not ok:
+                bad.append(label)
+    except Exception as exc:
+        bad.append("浮窗层级检查")
+        lines.append("FAIL 浮窗层级检查 : %s" % exc)
+
     lines.append("结果: " + ("PASS" if not bad else "FAIL " + ",".join(bad)))
     try:
         with open(os.path.join(app_dir(), "smoke.log"), "w",
