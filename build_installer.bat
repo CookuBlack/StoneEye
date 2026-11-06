@@ -64,6 +64,7 @@ echo [2/2] 打包安装程序
   --add-data "installer\payload_info.json;." ^
   --hidden-import app.ui_shell ^
   --hidden-import app.ui_widgets ^
+  --hidden-import PySide6.QtNetwork ^
   --exclude-module tkinter ^
   --exclude-module torch ^
   --exclude-module torchvision ^

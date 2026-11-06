@@ -19,6 +19,9 @@ from .hotkey_manager import HotkeyManager
 from .region_selector import RegionSelector
 from .screen_capture import capture
 from .capture_worker import make_frame
+from .screenshot_editor import (
+    ScreenshotEditor, capture_desktop, pixmap_to_pil,
+)
 from .recognition_service import RecognitionService
 from .window_manager import WindowManager
 from .live_window import MENU_QSS, normalize_mode
@@ -81,9 +84,10 @@ class AppController(QObject):
         mode_note = ("画面定格为快照，切屏不变" if self.cfg["live"]["capture_mode"] == "snapshot"
                      else "实时跟随屏幕区域刷新")
         self._tray.showMessage(
-            "截图贴图 OCR 已就绪",
-            f"按 {self.cfg['hotkey']} 框选一块区域 · {mode_note} · 命中整句标注景别/运镜",
-            QSystemTrayIcon.Information, 4000,
+            "StoneEye 已就绪",
+            f"按 {self.cfg['hotkey']} 框选一块区域，可用工具条标注 / 打码 / 提取文字 · "
+            f"{mode_note} · 完成后仍会生成置顶贴图并标景别/运镜",
+            QSystemTrayIcon.Information, 4500,
         )
 
     def _build_tray(self):
@@ -93,9 +97,10 @@ class AppController(QObject):
         self._menu = QMenu()          # 必须自己持有引用，setContextMenu 不接管所有权
         self._menu.setStyleSheet(MENU_QSS)
         self._act_select = self._menu.addAction(
-            f"新建截图贴图\t{self.cfg['hotkey']}"
+            f"截图并标注\t{self.cfg['hotkey']}"
         )
         self._act_select.triggered.connect(self.start_selection)
+        self._menu.addAction("快速贴图（跳过标注）", self.start_quick_selection)
         self._menu.addAction("控制面板", self.open_panel)
         self._menu.addSeparator()
         self._menu.addAction("重新加载配置", self.reload_config)
@@ -128,11 +133,21 @@ class AppController(QObject):
     # ---------- 主流程 ----------
     @Slot()
     def start_selection(self):
+        """截图 -> 标注编辑态 -> 完成。默认路径，工具栏 16 个功能都在这里。"""
+        self._do_selection(False)
+
+    @Slot()
+    def start_quick_selection(self):
+        """老路径：框完直接生成置顶贴图，不进标注编辑态。"""
+        self._do_selection(True)
+
+    def _do_selection(self, quick: bool):
         if self._selecting:
             return
         self._selecting = True
         rect, frame = None, None
         panel_was_visible = False
+        note = None
         try:
             # 面板与旧贴图都是置顶窗口，不隐藏会被 mss 拍进新截图里
             if self.panel is not None and self.panel.isVisible():
@@ -148,29 +163,48 @@ class AppController(QObject):
             if rect is None:
                 return
 
-            # 同步截首帧（mss 只需几毫秒），窗口立刻有内容，不必等 OCR
-            try:
+            if quick:
                 image = capture(rect)
-            except Exception as exc:
-                self._notify("截图失败", str(exc), 6000)
-                return
-            if image.width != rect.w or image.height != rect.h:
-                # 尺寸对不上通常是 DPI 换算出了问题，直接说出来，
-                # 否则用户只会看到「框的地方和截下来的不一样」
-                self._notify(
-                    "截图尺寸异常",
-                    f"选区 {rect.w}×{rect.h}，实得 "
-                    f"{image.width}×{image.height}。若画面错位，"
-                    "请检查显示缩放设置。", 7000,
-                )
-            frame = make_frame(-1, 1, image)
+                if image.width != rect.w or image.height != rect.h:
+                    self._notify("截图尺寸异常",
+                                 f"选区 {rect.w}×{rect.h}，实得 "
+                                 f"{image.width}×{image.height}。请检查显示缩放。",
+                                 7000)
+                frame = make_frame(-1, 1, image)
+            else:
+                # 整屏先冻结：编辑态里选区外是那一瞬间的画面压暗，
+                # 而不是背后还在动的桌面。此刻所有贴图仍处于隐藏状态。
+                screen_pm, full = capture_desktop()
+                editor = ScreenshotEditor(screen_pm, full, rect, self.cfg)
+                try:
+                    outcome = editor.exec()
+                except Exception as exc:
+                    self._notify("标注编辑器出错", str(exc), 6000)
+                    return
+                finally:
+                    editor.cleanup()
+                action = outcome.get("action", "cancel")
+                pm = outcome.get("pixmap")
+                if action in ("done", "pin"):
+                    if pm is not None and not pm.isNull():
+                        frame = make_frame(-1, 1, pixmap_to_pil(pm))
+                elif action == "save":
+                    note = ("截图已保存", "文件：%s" % outcome.get("path", ""), 3500)
+                elif action == "share":
+                    note = ("已复制到剪贴板",
+                            "去聊天窗口 Ctrl+V 粘贴即可发送", 3000)
+        except Exception as exc:
+            self._notify("截图失败", str(exc), 6000)
+            return
         finally:
-            # 必须等截图做完才恢复；取消框选 / 出错也要恢复
+            # 必须等截图 / 编辑态都做完才恢复；取消 / 出错也要恢复
             self.manager.show_all()
             self._selecting = False
-            if frame is None and panel_was_visible:
+            if frame is None and note is None and panel_was_visible:
                 self.panel.show()      # 取消框选：把面板还给用户
 
+        if note is not None:
+            self._notify(*note)
         if frame is None:
             return
         window = self.manager.create(rect, frame)
@@ -199,7 +233,7 @@ class AppController(QObject):
         self.manager.request_recognize_all(cfg)   # 新词表立刻对所有窗口生效
         self.hotkeys.reload(cfg["hotkey"])
         if self._act_select is not None:
-            self._act_select.setText(f"新建截图贴图\t{cfg['hotkey']}")
+            self._act_select.setText(f"截图并标注\t{cfg['hotkey']}")
         if self.panel is not None:
             self.panel.sync_from_config()
         mode = "快照（画面定格）" if cfg["live"]["capture_mode"] == "snapshot" else "实时刷新"

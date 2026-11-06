@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-StoneEye —— Windows 屏幕框选 OCR 整句标注 + 截图贴图工具（V4.7）
+StoneEye —— Windows 截图 / 标注 / OCR 整句标注 + 贴图工具（V4.8）
 启动入口。
 
 【交互模型】
@@ -188,8 +188,41 @@ def _selftest() -> int:
     return 0 if ok else 2
 
 
+def _smoke() -> int:
+    """打包后验证运行时延迟导入的模块都在包里（结果写 smoke.log）。"""
+    import importlib
+    names = (
+        "app.single_instance", "app.capture_icons", "app.capture_toolbar",
+        "app.screenshot_editor", "app.scroll_capture", "app.tray_app",
+        "PySide6.QtNetwork",
+    )
+    lines, bad = [], []
+    for name in names:
+        try:
+            importlib.import_module(name)
+            lines.append("OK   " + name)
+        except Exception as exc:
+            bad.append(name)
+            lines.append("FAIL %s : %s" % (name, exc))
+    lines.append("结果: " + ("PASS" if not bad else "FAIL " + ",".join(bad)))
+    try:
+        with open(os.path.join(app_dir(), "smoke.log"), "w",
+                  encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+    try:
+        sys.stderr.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+    return 0 if not bad else 2
+
+
 def main() -> int:
     _install_excepthook()
+
+    if "--smoke" in sys.argv:
+        return _smoke()
 
     if "--selftest" in sys.argv:
         return _selftest()
@@ -205,6 +238,13 @@ def main() -> int:
     app.setApplicationName("StoneEye")
     app.setApplicationDisplayName("StoneEye")
     app.setQuitOnLastWindowClosed(False)  # 关掉最后一张贴图也不能退出，托盘常驻
+
+    # 单实例：必须赶在建托盘 / 启动 OCR 线程之前。第二个 exe 会给第一个
+    # 发一条 "activate"，这边把控制面板唤起来，然后自己安静退出。
+    from app.single_instance import SingleInstance  # noqa: E402
+    guard = SingleInstance()
+    if not guard.try_start():
+        return 0
 
     # 任务栏图标：不走 AppUserModelID 的话，打包后任务栏认的是 python.exe，
     # 右键菜单会变成「Python」而且固定不到任务栏
@@ -243,6 +283,7 @@ def main() -> int:
     controller = AppController(app)
     controller.start()
     app.aboutToQuit.connect(controller.shutdown)
+    guard.activated.connect(lambda _cmd: controller.open_panel())
 
     # `StoneEye.exe --panel` 直接开控制面板。
     # 用途有两个：给快捷方式加参数就能一键开面板；打包后能绕开全局热键

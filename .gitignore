@@ -11,6 +11,7 @@ installer/payload_info.json
 install.log
 selftest.log
 selftest.png
+smoke.log
 error.log
 
 # Python

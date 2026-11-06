@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""StoneEye 安装程序（V4.7）。
+"""StoneEye 安装程序（V4.8）。
 
 为什么自己写而不上 Inno Setup / NSIS：
   - 这台机器访问不了 GitHub，winget 拉 Inno Setup 直接 InternetOpenUrl 失败；
