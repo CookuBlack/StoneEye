@@ -26,16 +26,17 @@ from PySide6.QtGui import (
     QPainter, QPen, QPixmap, QBrush,
 )
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from .brand import brand_qcolor, draw_selection_frame
-from .capture_toolbar import CaptureToolbar, OptionsBar, StickerPicker
+from .brand import brand_hex, brand_qcolor, draw_selection_frame
+from .capture_toolbar import (
+    CaptureToolbar, OptionsBar, StickerPicker, ToolSurface,
+)
 from .capture_icons import CLICK_TOOLS, DRAW_TOOLS
 from .coords import to_logical, to_physical, ui_scale, ui_zoom
 from .screen_capture import Rect, capture
-from .ui_shell import ShellWindow
 
 TIP = "拖动绘制   ·   Ctrl+Z 撤销   ·   Ctrl+S 保存   ·   Enter 完成   ·   Esc 取消"
 SETTLE_MS = 110
@@ -104,8 +105,14 @@ def _pos(event):
 
 
 class _OcrTextWorker(QThread):
-    """单独开一个引擎跑 OCR，避免把编辑器的 UI 线程卡住。"""
-    finished = Signal(str)
+    """单独开一个引擎跑 OCR，避免把编辑器的 UI 线程卡住。
+
+    结果信号不能叫 `finished`：QThread 自己有一个无参的 finished()，
+    Python 子类用同名 Signal(str) 覆盖会抢掉 C++ 的线程结束通知，
+    PySide 分发时还可能报参数不匹配。改名 resultReady，把
+    QThread.finished 留给「线程收工后兜底解锁工具条」。
+    """
+    resultReady = Signal(str)
 
     def __init__(self, image, cfg, parent=None):
         super().__init__(parent)
@@ -126,54 +133,90 @@ class _OcrTextWorker(QThread):
                 x = min((float(p[0]) for p in box), default=0.0)
                 rows.append((y, x, text))
             rows.sort(key=lambda r: (round(r[0] / 12), r[1]))
-            self.finished.emit("\n".join(r[2] for r in rows) or "（没认出文字）")
+            self.resultReady.emit("\n".join(r[2] for r in rows) or "（没认出文字）")
         except Exception as exc:
-            self.finished.emit("识别失败：%s" % exc)
+            self.resultReady.emit("识别失败：%s" % exc)
 
 
-class OcrTextPanel(ShellWindow):
-    """OCR 提取结果：只读文本 + 复制 / 关闭。"""
+class OcrTextPanel(ToolSurface):
+    """OCR 提取结果：只读文本 + 复制 / 关闭。
 
-    RADIUS = 12
-    PAD = 14
+    同一个面板可以换文字复用 —— 连点两次「提取文字」不该叠出两个窗口。
+    """
+
+    RADIUS = 13
 
     def __init__(self, text, parent=None):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.WindowStaysOnTopHint)
         self.setWindowTitle("提取文字")
+        self._text = text
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(self._spad, self._spad, self._spad, self._spad)
-        lay.setSpacing(round(8 * self._scale))
+        m = self.content_margins()
+        lay.setContentsMargins(m, m, m, m)
+        lay.setSpacing(round(9 * self._scale))
+
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(2, 0, 0, 0)
+        hl.setSpacing(round(8 * self._scale))
+        dot = QLabel()
+        d = self._px(8)
+        dot.setFixedSize(d, d)
+        dot.setStyleSheet("background:%s;border-radius:%dpx;"
+                          % (brand_hex(), d // 2))
         title = QLabel("提取文字")
-        title.setStyleSheet("color:#EFEFEF;font-weight:600;font-size:15px;")
-        lay.addWidget(title)
-        box = QTextEdit()
-        box.setReadOnly(True)
-        box.setPlainText(text)
-        box.setMinimumSize(round(360 * self._scale), round(190 * self._scale))
-        box.setStyleSheet(
-            "QTextEdit{background:#181818;color:#DEDEDE;border:1px solid #333;"
-            "border-radius:8px;padding:8px;selection-background-color:#3A5A80;}")
-        lay.addWidget(box)
+        title.setStyleSheet(
+            "color:#F2F5FA;font-weight:700;font-size:15px;"
+            "background:transparent;")
+        hl.addWidget(dot)
+        hl.addWidget(title)
+        hl.addStretch(1)
+        lay.addWidget(head)
+
+        self._box = QTextEdit()
+        self._box.setReadOnly(True)
+        self._box.setPlainText(text)
+        self._box.setMinimumSize(round(360 * self._scale),
+                                 round(190 * self._scale))
+        self._box.setStyleSheet(
+            "QTextEdit{background:#151920;color:#DEE5EF;"
+            "border:1px solid rgba(255,255,255,26);border-radius:9px;"
+            "padding:9px;selection-background-color:%s;}" % brand_hex())
+        lay.addWidget(self._box)
+
         row = QHBoxLayout()
         row.addStretch(1)
-        btn_copy = QPushButton("复制全部")
+        self._btn_copy = QPushButton("复制全部")
         btn_close = QPushButton("关闭")
-        for b in (btn_copy, btn_close):
+        self._btn_copy.setStyleSheet(
+            "QPushButton{background:%s;color:#101820;border:0;"
+            "border-radius:8px;padding:7px 18px;font-weight:700;}"
+            "QPushButton:hover{background:#EAF6FF;}" % brand_hex())
+        btn_close.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,18);color:#DCE3EE;"
+            "border:1px solid rgba(255,255,255,30);border-radius:8px;"
+            "padding:7px 18px;}"
+            "QPushButton:hover{background:rgba(255,255,255,46);color:#FFFFFF;}")
+        for b in (self._btn_copy, btn_close):
             b.setCursor(Qt.PointingHandCursor)
-            b.setStyleSheet(
-                "QPushButton{background:#2A2A2A;color:#E6E6E6;border:1px solid #444;"
-                "border-radius:7px;padding:6px 16px;}"
-                "QPushButton:hover{background:#363636;}")
+            b.setFocusPolicy(Qt.NoFocus)
             row.addWidget(b)
         lay.addLayout(row)
-        btn_copy.clicked.connect(lambda: (
-            QApplication.clipboard().setText(text),
-            btn_copy.setText("已复制")))
+        self._btn_copy.clicked.connect(self._copy_all)
         btn_close.clicked.connect(self.hide)
         self.adjustSize()
         self.setFixedSize(self.sizeHint())
         self.ensure_rim()
+
+    def _copy_all(self):
+        QApplication.clipboard().setText(self._text)
+        self._btn_copy.setText("已复制 ✓")
+
+    def set_text(self, text):
+        self._text = text
+        self._box.setPlainText(text)
+        self._btn_copy.setText("复制全部")
 
 
 class ScreenshotEditor(QWidget):
@@ -212,7 +255,7 @@ class ScreenshotEditor(QWidget):
         self._sticker = "😀"
         self._tool = "rect"
         self._color = QColor("#F2645B")
-        self._width = 3
+        self._width = 4
         self._font_size = 20
         self._long_pm = None
         self._result = None
@@ -224,6 +267,7 @@ class ScreenshotEditor(QWidget):
         self._toast_timer = None
         self._busy = False
         self._raise_pending = False
+        self._last_child = None
 
         self._mosaic_pm = QPixmap(screen_pm.size())
         self._mosaic_pm.fill(Qt.transparent)
@@ -237,6 +281,11 @@ class ScreenshotEditor(QWidget):
         self._options.widthChanged.connect(self._set_width)
         self._options.sizeChanged.connect(self._set_font_size)
         self._picker.picked.connect(self._on_sticker)
+        # 选项条在构造时就已经定好默认色 / 线宽 / 字号，那时信号还没连上；
+        # 主动同步一次，避免编辑器画的和选项条高亮的不是同一档。
+        self._set_color(self._options.color)
+        self._set_width(self._options.pen_width)
+        self._set_font_size(self._options.font_size)
 
     # ---------- 对外 ----------
     @classmethod
@@ -318,10 +367,14 @@ class ScreenshotEditor(QWidget):
         OCR 线程也必须等它收工：带着运行中的 QThread 析构会直接崩。
         """
         if self._ocr_worker is not None:
-            try:
-                self._ocr_worker.finished.disconnect()
-            except Exception:
-                pass
+            # 两个信号都要断：结果信号会弹面板，线程结束信号会摸工具条，
+            # 而它们此刻都已经被隐藏 / 准备销毁了。
+            for sig in (self._ocr_worker.resultReady,
+                        self._ocr_worker.finished):
+                try:
+                    sig.disconnect()
+                except Exception:
+                    pass
             if self._ocr_worker.isRunning():
                 self._ocr_worker.wait(6000)
             self._ocr_worker = None
@@ -387,13 +440,25 @@ class ScreenshotEditor(QWidget):
         if widget is None:
             return
         widget.show()
+        self._last_child = widget
         self._pin(widget)
 
     def _raise_children(self):
-        """兜底：前台切换 / 系统弹窗 / 点击画布之后，把可见浮窗捞回最上层。"""
-        for w in (self._toolbar, self._options, self._picker, self._ocr_panel):
-            if w is not None and w.isVisible():
-                self._pin(w)
+        """兜底：前台切换 / 系统弹窗 / 点击画布之后，把可见浮窗捞回最上层。
+
+        顺序不能写死：OCR 面板和表情板可能同时在屏幕上，固定顺序会让
+        早先弹出的 OCR 面板把用户刚切出来的表情板压住。最近显示过的
+        那个最后 pin，Windows 就把它留在 owned window 组最上面。
+        """
+        order = [w for w in (self._toolbar, self._options,
+                             self._picker, self._ocr_panel)
+                 if w is not None and w.isVisible()]
+        last = self._last_child
+        if last in order:
+            order.remove(last)
+            order.append(last)
+        for w in order:
+            self._pin(w)
 
     def _resume(self):
         """从文件对话框 / 截长图 / 系统弹窗回来后恢复整组浮窗。
@@ -447,8 +512,9 @@ class ScreenshotEditor(QWidget):
             self._show_child(self._picker)
         else:
             self._picker.hide()
-        self.setCursor(Qt.CrossCursor if tool not in ("ocr", "long")
-                       else Qt.ArrowCursor)
+        # 点击型工具给手型，拖拽型给十字，动作按钮不再进入这里
+        self.setCursor(Qt.PointingHandCursor if tool in CLICK_TOOLS
+                       else Qt.CrossCursor)
         self.update()
 
     def _set_color(self, value):
@@ -467,7 +533,8 @@ class ScreenshotEditor(QWidget):
 
     # ---------- 工具栏动作 ----------
     def _on_action(self, action):
-        if self._busy:
+        # 识别 / 截长图期间其余动作一律拦下，但「取消」必须随时能按
+        if self._busy and action != "cancel":
             return
         if action == "undo":
             self._undo()
@@ -494,8 +561,23 @@ class ScreenshotEditor(QWidget):
         item = self._items.pop()
         if item["kind"] == "mosaic":
             self._rebuild_mosaic()
+        self._renumber()
         self._toolbar.set_undo_enabled(bool(self._items))
         self.update()
+
+    def _renumber(self):
+        """重排序号：撤销后画面上永远是从 1 开始的连续 1、2、3…。
+
+        老实现只在 mousePress 里 `_number += 1`，撤销时计数器不回退，
+        标了 6 个再撤销 3 个，接着点就从 4 开始（用户反馈的那张图）。
+        撤销栈只能从尾部弹，所以重编号既修好计数，也顺手抹平任何空洞。
+        """
+        n = 0
+        for item in self._items:
+            if item["kind"] == "number":
+                n += 1
+                item["n"] = n
+        self._number = n + 1
 
     def _save(self):
         pm = self._compose()
@@ -529,24 +611,34 @@ class ScreenshotEditor(QWidget):
 
     # ---------- OCR ----------
     def _run_ocr(self):
-        from PIL import Image
+        if self._ocr_worker is not None and self._ocr_worker.isRunning():
+            return
         crop = self._compose_base()
         img = pixmap_to_pil(crop)
         self._busy = True
         self._toolbar.set_busy(True)
         self._toast("正在识别文字…")
         self._ocr_worker = _OcrTextWorker(img, self._cfg)
-        self._ocr_worker.finished.connect(self._on_ocr_done)
+        self._ocr_worker.resultReady.connect(self._on_ocr_done)
+        self._ocr_worker.finished.connect(self._ocr_thread_done)
         self._ocr_worker.start()
 
+    def _ocr_thread_done(self):
+        """线程无论如何收工，工具条都不能一直锁在 busy 状态。"""
+        if self._busy:
+            self._busy = False
+            if self._toolbar is not None:
+                self._toolbar.set_busy(False)
+
     def _on_ocr_done(self, text):
-        self._busy = False
-        self._toolbar.set_busy(False)
+        self._ocr_thread_done()
+        # 用户可能在识别途中点了完成 / 取消，别把面板弹回已关闭的编辑器
+        if self._result is not None or not self.isVisible():
+            return
         if self._ocr_panel is None:
             self._ocr_panel = OcrTextPanel(text)
         else:
-            self._ocr_panel.deleteLater()
-            self._ocr_panel = OcrTextPanel(text)
+            self._ocr_panel.set_text(text)
         g = self._sel_global()
         x = max(self._geom.left() + 8,
                 min(g.center().x() - self._ocr_panel.width() // 2,
@@ -554,28 +646,40 @@ class ScreenshotEditor(QWidget):
         y = max(self._geom.top() + 8, g.top() + 16)
         self._ocr_panel.move(x, y)
         self._show_child(self._ocr_panel)
+        self._raise_children()
 
     # ---------- 截长图 ----------
     def _run_long(self):
+        if getattr(self, "_is_reedit", False):
+            self._toast("二次编辑里没有可滚动的原窗口，截长图请在首次截图时用")
+            return
         from .scroll_capture import capture_long
         self._busy = True
         self._toolbar.set_busy(True)
+        self._toast("正在滚动截长图…")
         self._hide_children()
         self.hide()
         self._settle(150)
+        err = ""
         try:
             img, used = capture_long(self._sel_phys, steps=8, delay=0.30)
         except Exception as exc:
-            QMessageBox.warning(None, "截长图失败", str(exc))
+            # 不用 QMessageBox：模态框会插进 topmost Z 序，关掉之后工具条
+            # 容易被压到编辑器底下（V4.8.1 修过的同类问题）
             img, used = None, 0
+            err = str(exc)
         self._busy = False
-        self._toolbar.set_busy(False)
+        if self._toolbar is not None:
+            self._toolbar.set_busy(False)
+        if self._result is not None:
+            return
         self._resume()
         if img is None:
-            self._toast("截长图没成功，可以再试一次")
+            self._toast("截长图没成功：%s" % (err or "页面可能不支持滚动"))
             return
         self._long_pm = _pil_to_pixmap(img)
         self._items.clear()
+        self._renumber()
         self._rebuild_mosaic()
         self._toolbar.set_undo_enabled(False)
         self._options.hide()

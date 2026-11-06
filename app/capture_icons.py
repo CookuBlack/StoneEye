@@ -108,12 +108,21 @@ def _stroke_icon(p, name):
         p.drawRoundedRect(QRectF(16, 10, 5, 5), 1, 1)
         p.restore()
     elif name == "ocr":
-        p.drawRoundedRect(QRectF(2.5, 4, 19, 16), 2, 2)
+        # 四角取景框 + "文"：比一整个实线方框更像「识别文字」，也和
+        # 框选态的四角把手是同一套视觉语言。
+        corners = (
+            [(3, 9), (3, 4.5), (7.5, 4.5)],
+            [(16.5, 4.5), (21, 4.5), (21, 9)],
+            [(21, 15), (21, 19.5), (16.5, 19.5)],
+            [(7.5, 19.5), (3, 19.5), (3, 15)],
+        )
+        for pts in corners:
+            _polyline(p, pts)
         f = QFont("Microsoft YaHei UI", 10)
         f.setBold(True)
         p.save()
         p.setFont(f)
-        p.drawText(QRectF(2.5, 4, 19, 16), Qt.AlignCenter, "文")
+        p.drawText(QRectF(5, 5, 14, 14), Qt.AlignCenter, "文")
         p.restore()
     elif name == "long":
         pen = QPen(p.pen())
@@ -157,14 +166,13 @@ def _stroke_icon(p, name):
 
 def draw_icon(painter: QPainter, name: str, rect: QRectF, color: QColor,
               active: bool = False, enabled: bool = True):
-    """在 rect 内居中画图标；active 时先铺一层选中胶囊。"""
+    """在 rect 内居中画图标。
+
+    状态底（hover / 选中 / 按下脉冲）一律由 `ToolButton` 画，这里只负责
+    线条 —— 否则按钮圆角胶囊和图标自带的圆角方框会叠成两层边框。
+    """
     painter.save()
     painter.setRenderHint(QPainter.Antialiasing, True)
-    if active:
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(255, 255, 255, 30))
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 6, 6)
-
     if not enabled:
         color = ICON_DISABLED
     elif name == "cancel":
@@ -178,7 +186,7 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: QColor,
     painter.scale(scale, scale)
     painter.translate(-12, -12)
 
-    width = 2.0 if name in ("done", "cancel") else 1.65
+    width = 2.1 if name in ("done", "cancel") else (1.85 if active else 1.65)
     pen = QPen(QBrush(color), width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)

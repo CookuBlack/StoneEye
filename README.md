@@ -3,7 +3,7 @@
 框选屏幕任意一块 → OCR 认出画面里的「景别 / 运镜」→ 按句子切分、上色 → 把标注贴回原处并跟着走。
 面向小说转漫画的分镜标注：看得懂「全景 / 中景 / 特写 / 推 / 拉 / 摇 / 移」，也能自己加词表。
 
-当前版本 **4.9.0**。
+当前版本 **4.9.1**。
 
 ---
 
@@ -21,7 +21,8 @@
 ## 截图编辑态与标注工具栏
 
 按 `Ctrl+Alt+Q` 框选完，画面会先冻结进入可标注的编辑态，选区下方浮出一条
-和微信 / QQ 截图同款的 16 键工具条（两条灰色分隔线分三组）：
+和微信 / QQ 截图同款的 16 键工具条（两条渐隐分隔线分三组，冷调玻璃底板 +
+图标色顶缘高光）：
 
 | 组 | 功能 |
 |---|---|
@@ -36,6 +37,14 @@
 - 截长图用 Win32 滚轮事件自动滚 8 帧，按重叠行算位移后拼成一张长图；要求目标窗口
   能响应滚轮，且滚动期间别动鼠标。长图生成后不能再叠加标注，直接完成 / 保存即可。
 - 快捷键：`Ctrl+Z` 撤销、`Ctrl+S` 保存、`Enter` 完成、`Esc` / 右键取消。
+- **4.9.1**：「提取文字」「截长图」改成点一下就执行的动作按钮（此前被误做成
+  复选工具，点了完全没反应）；OCR 结果面板复用同一个窗口、线程收工会兜底解锁
+  工具条，截长图失败改用提示条而不是会打乱层级的模态框。
+- **4.9.1**：序号标注撤销后按剩余标注重新编号，全部撤销再标一定从 1 开始，
+  中间夹其它标注也不会跳号。
+- **4.9.1**：工具条 / 选项条 / 表情板 / OCR 面板统一换成冷调玻璃底板和品牌色
+  顶缘渐隐高光；按钮的悬停、选中、点击脉冲都有补间，选中工具带胶囊与底部
+  指示点，线宽档位改成能看出粗细的横线且默认档位一定有选中态。
 - **完成**＝复制到剪贴板并生成置顶贴图（保留原来的 OCR 景别/运镜标注链路）；
   **钉在桌面**＝只生成置顶贴图；**发送**＝复制到剪贴板，去聊天窗口 `Ctrl+V`；
   **保存**＝写出 PNG；**取消**＝丢弃。
@@ -101,7 +110,7 @@ python tools\icon_from_image.py            :: -> assets/app.png + assets/app.ico
 ```bat
 build.bat onedir           :: 文件夹版 -> dist\StoneEye\
 build.bat onefile          :: 单文件版
-build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.0.exe
+build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.1.exe
 ```
 
 `build_installer.bat` 依赖上一步的 `dist\StoneEye`：它会把那份产物压成
@@ -112,7 +121,7 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.0.
 
 ## 安装
 
-双击 `StoneEye_安装程序_v4.9.0.exe`：
+双击 `StoneEye_安装程序_v4.9.1.exe`：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\StoneEye`，免管理员）；
 2. 勾快捷方式 / 开机自启；
@@ -124,8 +133,8 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.0.
 ### 静默安装 / 卸载（部署用）
 
 ```bat
-StoneEye_安装程序_v4.9.0.exe --silent --dir "D:\Apps\StoneEye"
-StoneEye_安装程序_v4.9.0.exe --silent --no-desktop --no-startmenu --autostart
+StoneEye_安装程序_v4.9.1.exe --silent --dir "D:\Apps\StoneEye"
+StoneEye_安装程序_v4.9.1.exe --silent --no-desktop --no-startmenu --autostart
 StoneEye.exe --uninstall --quiet
 ```
 

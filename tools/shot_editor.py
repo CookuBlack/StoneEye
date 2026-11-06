@@ -219,7 +219,10 @@ def main():
     ed._picker.show(); pump(100)
     composite(ed._picker, os.path.join(OUT, "stickers.png"), (222, 224, 228))
     ed._picker.hide()
-    composite(ed, os.path.join(OUT, "editor.png"), (236, 238, 242))
+    # 工具条 / 选项条是独立顶层窗口，grab(editor) 抓不到；
+    # 用带浮窗的合成才能看出工具条在真实编辑态里的大小和位置。
+    composite_with_children(ed, os.path.join(OUT, "editor.png"),
+                            (236, 238, 242))
     ed._compose().save(os.path.join(OUT, "editor_result.png"), "PNG")
     print("saved", os.path.join(OUT, "editor_result.png"))
     ed._hide_children()

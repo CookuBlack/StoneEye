@@ -217,6 +217,17 @@ def _smoke() -> int:
             (all(hasattr(se.ScreenshotEditor, n) for n in (
                 "_attach", "_pin", "_show_child", "_raise_children",
                 "_resume", "show_editor")), "浮窗层级方法"),
+            # V4.9.1：两个按钮的归类、序号重编号、OCR 面板复用
+            ("ocr" in tb.ACTION_IDS and "long" in tb.ACTION_IDS,
+             "OCR/长图是动作按钮"),
+            (all(hasattr(se.ScreenshotEditor, n) for n in (
+                "_renumber", "_ocr_thread_done", "_run_ocr", "_run_long")),
+             "动作链路与序号重编号"),
+            (hasattr(se._OcrTextWorker, "resultReady")
+             and hasattr(se.OcrTextPanel, "set_text"),
+             "OCR 线程信号与面板复用"),
+            (hasattr(tb, "ToolSurface") and hasattr(tb, "_WidthSwatch"),
+             "工具面板视觉组件"),
         )
         for ok, label in extra:
             lines.append(("OK   " if ok else "FAIL ") + label)

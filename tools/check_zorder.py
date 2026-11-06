@@ -110,6 +110,9 @@ def main():
                 "" if owner == eh else "(owner 丢失)"))
             if not good or owner != eh:
                 ok = False
+                print("    [诊断] %s geometry=%s 命中=%s(%s)" % (
+                    name, (w.x(), w.y(), w.width(), w.height()),
+                    known.get(h, title(h)), h))
         print("%-20s %s" % (tag, "  ".join(detail)))
         return ok
 
@@ -161,7 +164,9 @@ def main():
     pump(app, 150)
     from app.screenshot_editor import OcrTextPanel
     ed._ocr_panel = OcrTextPanel("测试文字")
-    ed._ocr_panel.move(500, 300)
+    # 面板美化后变大，塞在选区里会和表情板物理重叠；这一项验的是
+    # 「多个 owned window 同开时层级都对」，所以把它挪到不重叠的左上角。
+    ed._ocr_panel.move(20, 20)
     ed._show_child(ed._ocr_panel)
     activate_editor()
     results.append(("表情板+OCR同开", probe("表情板+OCR同开")))

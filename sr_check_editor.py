@@ -96,10 +96,34 @@ check("左边界不外溢", left.left() >= screen.left(), left)
 opt = OptionsBar()
 check("选项条颜色 8 个", len(opt._colors) == 8)
 check("选项条线宽 3 档", len(opt._widths) == 3)
+check("默认线宽落在档位里",
+      opt.pen_width in tuple(w for w, _ in opt._widths), opt.pen_width)
+check("默认线宽有选中态",
+      any(b.isChecked() for w, b in opt._widths if w == opt.pen_width))
+opt.set_mode("text")
+check("文字模式隐藏线宽组并保留字号分隔线",
+      all(b.isHidden() for _, b in opt._widths)
+      and not opt._size_sep.isHidden())
+opt.set_mode("rect")
+check("绘制模式不留孤立分隔线", opt._size_sep.isHidden()
+      and all(not b.isHidden() for _, b in opt._widths))
 opt._bump_size(6)
 check("字号可调", opt.font_size == 26, opt.font_size)
 pk = StickerPicker()
 check("表情 20 个", pk.layout().count() == 20, pk.layout().count())
+
+# ---- 2.5 动作按钮归类（V4.9.1）----
+print("\n# 2.5 动作按钮归类")
+for ident in ("ocr", "long"):
+    check("%s 不应该是复选工具" % ident,
+          not bar._buttons[ident].isCheckable())
+    fired.clear()
+    bar._buttons[ident].click()
+    check("点击 %s 发出动作信号" % ident, fired == [ident], fired)
+for ident in ("rect", "number"):
+    check("%s 仍是复选工具" % ident, bar._buttons[ident].isCheckable())
+check("动作集合恰好是 8 个（6 个常规 + ocr + long）",
+      len(__import__("app.capture_toolbar", fromlist=["ACTION_IDS"]).ACTION_IDS) == 8)
 
 # ---- 3. 编辑器构造 ----
 print("\n# 3 编辑器")
@@ -180,6 +204,71 @@ ed._long_pm = QPixmap.fromImage(
 long_out = ed._compose()
 check("长图输出尺寸", long_out.height() == 500, long_out.height())
 ed._long_pm = None
+
+# ---- 3.5 序号撤销重编号 / OCR / 长图动作链路 ----
+print("\n# 3.5 序号重编号与动作链路")
+ne = ScreenshotEditor(base, full, sel, {})
+ne._set_tool("number")
+seq = [QPoint(ed._sel.left() + 20 + i * 26, ed._sel.top() + 30)
+       for i in range(6)]
+for pt in seq:
+    _press(ne, pt)
+check("连续标注 1..6", [a["n"] for a in ne._items] == [1, 2, 3, 4, 5, 6],
+      [a["n"] for a in ne._items])
+for _ in range(3):
+    ne._undo()
+check("撤销 3 个后画面编号仍连续",
+      [a["n"] for a in ne._items] == [1, 2, 3], [a["n"] for a in ne._items])
+check("撤销后下一个序号是 4", ne._number == 4, ne._number)
+_press(ne, seq[3])
+check("接着标从 4 开始", ne._items[-1]["n"] == 4)
+for _ in range(4):
+    ne._undo()
+check("全部撤销后计数归 1", ne._number == 1 and not ne._items,
+      (ne._number, len(ne._items)))
+_press(ne, seq[0])
+check("重新标注从 1 开始", ne._items[-1]["n"] == 1, ne._items[-1]["n"])
+ne._set_tool("rect")
+_press(ne, seq[1]); _move(ne, seq[2]); _release(ne, seq[2])
+ne._undo()
+check("撤销非序号标注不打乱编号",
+      ne._number == 2 and ne._items[-1]["n"] == 1)
+
+calls = []
+ne._run_ocr = lambda: calls.append("ocr")
+ne._run_long = lambda: calls.append("long")
+ne._on_action("ocr")
+ne._on_action("long")
+check("编辑器接住 ocr / long 动作", calls == ["ocr", "long"], calls)
+ne._busy = True
+ne._on_action("save")
+check("busy 时其它动作被拦下", calls == ["ocr", "long"], calls)
+ne._on_action("cancel")
+check("busy 时取消仍可用", ne.result()["action"] == "cancel")
+ne._busy = True
+ne._toolbar.set_busy(True)
+ne._ocr_thread_done()
+check("线程收工兜底解锁工具条",
+      ne._busy is False and ne._toolbar._buttons["ocr"].isEnabled())
+
+from app.screenshot_editor import OcrTextPanel
+panel = OcrTextPanel("第一行\n第二行")
+check("OCR 面板初始文本", panel._box.toPlainText() == "第一行\n第二行")
+panel.set_text("新结果")
+check("OCR 面板可复用换文本",
+      panel._box.toPlainText() == "新结果" and panel._text == "新结果")
+panel._copy_all()
+check("复制按钮给出反馈", "已复制" in panel._btn_copy.text())
+panel.hide(); panel.deleteLater()
+ne.cleanup()
+app.processEvents()
+
+re2 = ScreenshotEditor.for_image(base, {})
+re2._run_long()
+check("二次编辑拒绝截长图（没有可滚动的原窗口）",
+      re2._long_pm is None and re2._busy is False)
+re2.cleanup()
+app.processEvents()
 
 # ---- 4. 长图拼接 ----
 print("\n# 4 长图拼接")
