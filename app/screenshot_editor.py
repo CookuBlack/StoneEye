@@ -268,6 +268,14 @@ class ScreenshotEditor(QWidget):
         self._busy = False
         self._raise_pending = False
         self._last_child = None
+        # 手动滚轮截长图会话（V4.9.2）：编辑器隐藏期间靠 HUD + QTimer 驱动
+        self._long_session = None
+        self._long_hud = None
+        self._long_timer = None
+        self._long_active = False
+        self._long_overlap = False
+        # 可选注入点：离屏自检用合成帧喂会话，不必真的抓屏
+        self._long_factory = None
 
         self._mosaic_pm = QPixmap(screen_pm.size())
         self._mosaic_pm.fill(Qt.transparent)
@@ -366,6 +374,9 @@ class ScreenshotEditor(QWidget):
         一套，不显式释放就会一次漏 4 个 HWND。
         OCR 线程也必须等它收工：带着运行中的 QThread 析构会直接崩。
         """
+        # 长图模式是异步的：不先停掉 timer / HUD，编辑器析构后会留下一个
+        # 永远在转的采样循环和一块无主的顶层浮窗
+        self._end_long_mode(resume=False)
         if self._ocr_worker is not None:
             # 两个信号都要断：结果信号会弹面板，线程结束信号会摸工具条，
             # 而它们此刻都已经被隐藏 / 准备销毁了。
@@ -600,6 +611,9 @@ class ScreenshotEditor(QWidget):
         self._finish("save" if ok else "cancel", pm, path)
 
     def _finish(self, action, pixmap=None, path=""):
+        # 万一从别处（托盘 / 快捷键）在长图模式里结束了截图，先收干净会话
+        if self._long_active:
+            self._end_long_mode(resume=False)
         self._result = {
             "action": action, "pixmap": pixmap, "path": path,
             "rect": self._sel_phys,
@@ -648,44 +662,132 @@ class ScreenshotEditor(QWidget):
         self._show_child(self._ocr_panel)
         self._raise_children()
 
-    # ---------- 截长图 ----------
+    # ---------- 截长图（手动滚轮）----------
     def _run_long(self):
+        """进入手动长图模式：滚动交给用户，程序只负责采样 + 拼接。"""
         if getattr(self, "_is_reedit", False):
             self._toast("二次编辑里没有可滚动的原窗口，截长图请在首次截图时用")
             return
-        from .scroll_capture import capture_long
+        if self._long_active or self._busy or self._result is not None:
+            return
+        from .long_capture import (
+            SAMPLE_MS, LongCaptureHUD, ManualLongCapture,
+        )
+
+        hud = LongCaptureHUD()
+        hud.finishClicked.connect(self._finish_long)
+        hud.cancelClicked.connect(self._cancel_long)
+        overlap = hud.place_outside(self._sel_global(), self._geom)
+
         self._busy = True
-        self._toolbar.set_busy(True)
-        self._toast("正在滚动截长图…")
+        if self._toolbar is not None:
+            self._toolbar.set_busy(True)
         self._hide_children()
         self.hide()
-        self._settle(150)
-        err = ""
+        self._settle(160)          # 等编辑器真的从屏幕上消失，别把它拍进去
+
+        factory = getattr(self, "_long_factory", None)
+        session = (factory(self._sel_phys) if factory is not None
+                   else ManualLongCapture(self._sel_phys))
         try:
-            img, used = capture_long(self._sel_phys, steps=8, delay=0.30)
+            session.begin()
         except Exception as exc:
-            # 不用 QMessageBox：模态框会插进 topmost Z 序，关掉之后工具条
-            # 容易被压到编辑器底下（V4.8.1 修过的同类问题）
-            img, used = None, 0
-            err = str(exc)
-        self._busy = False
-        if self._toolbar is not None:
-            self._toolbar.set_busy(False)
-        if self._result is not None:
+            session.release()
+            hud.hide()
+            hud.deleteLater()
+            self._busy = False
+            if self._toolbar is not None:
+                self._toolbar.set_busy(False)
+            self._resume()
+            self._toast("截长图没能启动：%s" % exc)
             return
-        self._resume()
-        if img is None:
-            self._toast("截长图没成功：%s" % (err or "页面可能不支持滚动"))
+
+        self._long_session = session
+        self._long_hud = hud
+        self._long_overlap = overlap
+        self._long_active = True
+        # HUD 是独立顶层窗口，不能走 _show_child / _pin：编辑器此刻是隐藏的，
+        # Windows 会把挂在它名下的 owned window 一起藏掉。
+        hud.show()
+        hud.raise_()
+        hud.set_status(session.width, session.height, 0)
+        self._long_timer = QTimer(self)
+        self._long_timer.setInterval(SAMPLE_MS)
+        self._long_timer.timeout.connect(self._poll_long)
+        self._long_timer.start()
+
+    def _poll_long(self):
+        s, hud = self._long_session, self._long_hud
+        if s is None or hud is None:
+            return
+        # 极少数「选区几乎占满整屏」的情况，HUD 只能压在选区上；
+        # 抓帧那一瞬间把它藏掉，免得控制条被拼进长图里。
+        hide_hud = self._long_overlap and hud.isVisible()
+        if hide_hud:
+            hud.hide()
+            QApplication.processEvents()
+        try:
+            s.poll()
+        except Exception as exc:
+            self._end_long_mode()
+            self._toast("截长图中断：%s" % exc)
+            return
+        finally:
+            if hide_hud and self._long_hud is not None:
+                hud.show()
+                hud.raise_()
+        hud.set_status(s.width, s.height, s.segments, s.limited, s.gained)
+
+    def _finish_long(self):
+        s = self._long_session
+        if s is None:
+            return
+        try:
+            img, segs, _gained = s.finish()
+        except Exception as exc:
+            self._end_long_mode()
+            self._toast("截长图失败：%s" % exc)
+            return
+        self._end_long_mode()
+        if segs == 0:
+            self._toast("没检测到滚动：把鼠标留在截图区域里，慢慢向下滚滚轮")
             return
         self._long_pm = _pil_to_pixmap(img)
         self._items.clear()
         self._renumber()
         self._rebuild_mosaic()
-        self._toolbar.set_undo_enabled(False)
+        if self._toolbar is not None:
+            self._toolbar.set_undo_enabled(False)
         self._options.hide()
-        self._toast("长图 %d×%d（%d 帧）· 可直接完成 / 保存"
-                    % (img.width, img.height, used))
+        self._toast("长图 %d×%d · %d 段 · 可直接完成 / 保存"
+                    % (img.width, img.height, segs))
         self.update()
+
+    def _cancel_long(self):
+        if not self._long_active:
+            return
+        self._end_long_mode()
+        self._toast("已取消截长图，回到标注")
+
+    def _end_long_mode(self, resume=True):
+        """收掉 timer / HUD / 会话并恢复编辑态；cleanup 时 resume=False。"""
+        if self._long_timer is not None:
+            self._long_timer.stop()
+            self._long_timer = None
+        if self._long_session is not None:
+            self._long_session.release()
+            self._long_session = None
+        if self._long_hud is not None:
+            self._long_hud.hide()
+            self._long_hud.deleteLater()
+            self._long_hud = None
+        self._long_active = False
+        self._long_overlap = False
+        self._busy = False
+        if self._toolbar is not None:
+            self._toolbar.set_busy(False)
+        if resume:
+            self._resume()
 
     # ---------- 绘制 ----------
     def paintEvent(self, _e):
@@ -979,6 +1081,9 @@ class ScreenshotEditor(QWidget):
         key = event.key()
         mods = event.modifiers()
         if key == Qt.Key_Escape:
+            if self._long_active:
+                self._cancel_long()
+                return
             self._finish("cancel")
         elif key in (Qt.Key_Return, Qt.Key_Enter):
             self._on_action("done")

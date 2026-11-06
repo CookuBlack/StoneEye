@@ -194,7 +194,7 @@ def _smoke() -> int:
     names = (
         "app.brand", "app.single_instance", "app.capture_icons",
         "app.capture_toolbar", "app.screenshot_editor", "app.scroll_capture",
-        "app.tray_app", "PySide6.QtNetwork",
+        "app.long_capture", "app.tray_app", "PySide6.QtNetwork",
     )
     lines, bad = [], []
     for name in names:
@@ -228,6 +228,12 @@ def _smoke() -> int:
              "OCR 线程信号与面板复用"),
             (hasattr(tb, "ToolSurface") and hasattr(tb, "_WidthSwatch"),
              "工具面板视觉组件"),
+            # V4.9.2：长图改成手动滚轮会话，自动抓取入口必须已经拿掉
+            (all(hasattr(se.ScreenshotEditor, n) for n in (
+                "_run_long", "_poll_long", "_finish_long",
+                "_cancel_long", "_end_long_mode")), "手动滚轮长图链路"),
+            (not hasattr(__import__("app.scroll_capture", fromlist=["x"]),
+                         "capture_long"), "自动滚轮抓取已移除"),
         )
         for ok, label in extra:
             lines.append(("OK   " if ok else "FAIL ") + label)

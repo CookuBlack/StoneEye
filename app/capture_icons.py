@@ -6,6 +6,11 @@
 虚拟画布画线，调用方给多大就等比放大多少。
 
 顺序与微信 / QQ 截图工具栏一致，按两条灰色分隔线分成三组。
+
+V4.9.2 重画了 ADVANCED 组 + 撤销：小尺寸下汉字笔画会糊成一团，
+所以 OCR 改成「取景框 + 文本行」，序号改成和画面标注一致的圆形气泡，
+长图改成「视窗 + 向下箭头 + 延伸虚线」，撤销补了实心箭头头部 ——
+禁用态也要一眼看出是撤销，而不是一根没头没尾的弯钩。
 """
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush
@@ -24,7 +29,7 @@ TOOLS = (
 ADVANCED = (
     ("number", "序号", "添加序号：逐次点击生成 1、2、3…"),
     ("ocr", "提取文字", "OCR：识别选区文字，可一键复制"),
-    ("long", "截长图", "截长图：自动向下滚动并拼接"),
+    ("long", "截长图", "滚动截长图：自己滚动滚轮，点「完成拼接」结束"),
 )
 
 ACTIONS = (
@@ -45,7 +50,9 @@ ICON_HOVER = QColor("#FFFFFF")
 ICON_ACTIVE = QColor("#FFFFFF")
 ICON_CANCEL = QColor("#F2645B")
 ICON_DONE = QColor("#4FD07A")
-ICON_DISABLED = QColor("#5A5C60")
+# 冷灰禁用色：比纯灰更贴玻璃底板，又比原来的 #5A5C60 亮一档，
+# 20px 图标在禁用态下仍能看清轮廓。
+ICON_DISABLED = QColor("#79818F")
 
 
 def _polyline(p, pts):
@@ -95,53 +102,61 @@ def _stroke_icon(p, name):
         p.drawText(QRectF(3, 3, 18, 18), Qt.AlignCenter, "T")
         p.restore()
     elif name == "number":
-        p.drawRoundedRect(QRectF(3.5, 5, 14, 14), 2, 2)
+        # 和画面上真正画出来的序号标注同款：一个圆形数字气泡，
+        # 右下再点一个小圆表示「还能接着编号」。
+        p.drawEllipse(QRectF(2.5, 2.5, 15, 15))
         f = QFont("Segoe UI", 10)
         f.setBold(True)
         p.save()
-        col = p.pen().color()
         p.setFont(f)
-        p.drawText(QRectF(3.5, 5, 14, 14), Qt.AlignCenter, "1")
+        p.drawText(QRectF(2.5, 2.5, 15, 15), Qt.AlignCenter, "1")
+        col = p.pen().color()
         p.setPen(Qt.NoPen)
         p.setBrush(col)
-        p.drawRoundedRect(QRectF(16, 3, 5, 5), 1, 1)
-        p.drawRoundedRect(QRectF(16, 10, 5, 5), 1, 1)
+        p.drawEllipse(QRectF(16.5, 16.5, 5, 5))
         p.restore()
     elif name == "ocr":
-        # 四角取景框 + "文"：比一整个实线方框更像「识别文字」，也和
-        # 框选态的四角把手是同一套视觉语言。
+        # 四角取景框 + 三行文字。之前框里放一个「文」字，20px 下
+        # 横竖撇捺挤成一个叉，反而看不出是识别文字。
         corners = (
-            [(3, 9), (3, 4.5), (7.5, 4.5)],
-            [(16.5, 4.5), (21, 4.5), (21, 9)],
-            [(21, 15), (21, 19.5), (16.5, 19.5)],
-            [(7.5, 19.5), (3, 19.5), (3, 15)],
+            [(2.5, 8.5), (2.5, 3.5), (7.5, 3.5)],
+            [(16.5, 3.5), (21.5, 3.5), (21.5, 8.5)],
+            [(21.5, 15.5), (21.5, 20.5), (16.5, 20.5)],
+            [(7.5, 20.5), (2.5, 20.5), (2.5, 15.5)],
         )
         for pts in corners:
             _polyline(p, pts)
-        f = QFont("Microsoft YaHei UI", 10)
-        f.setBold(True)
-        p.save()
-        p.setFont(f)
-        p.drawText(QRectF(5, 5, 14, 14), Qt.AlignCenter, "文")
-        p.restore()
+        for y, x2 in ((9.0, 17.0), (12.5, 14.5), (16.0, 16.0)):
+            p.drawLine(QPointF(7.0, y), QPointF(x2, y))
     elif name == "long":
+        # 手动滚动长图：实线视窗 + 向下箭头，底下两段虚线是「还会往下长」。
+        # 不用双向箭头了 —— 现在只往下滚，滚多少由用户说了算。
+        p.drawRoundedRect(QRectF(4.5, 2.5, 15, 13), 2, 2)
+        p.drawLine(QPointF(12, 6.0), QPointF(12, 12.0))
+        _polyline(p, [(9, 9.5), (12, 12.5), (15, 9.5)])
         pen = QPen(p.pen())
         pen.setStyle(Qt.DashLine)
-        pen.setDashPattern([2.5, 2.0])
+        pen.setDashPattern([2.6, 2.2])
         p.save()
         p.setPen(pen)
-        p.drawRoundedRect(QRectF(4, 3, 16, 18), 2, 2)
+        p.drawLine(QPointF(5.5, 18.5), QPointF(18.5, 18.5))
+        p.drawLine(QPointF(7.5, 21.5), QPointF(16.5, 21.5))
         p.restore()
-        _polyline(p, [(9, 9), (12, 6), (15, 9)])
-        _polyline(p, [(9, 15), (12, 18), (15, 15)])
-        p.drawLine(QPointF(12, 6), QPointF(12, 18))
     elif name == "undo":
         from PySide6.QtGui import QPainterPath
-        path = QPainterPath(QPointF(19, 17))
-        path.quadTo(QPointF(6, 19), QPointF(5, 11))
-        path.quadTo(QPointF(4.5, 6), QPointF(9.5, 6))
+        path = QPainterPath(QPointF(20, 16.5))
+        path.quadTo(QPointF(19, 20.5), QPointF(12, 20.5))
+        path.quadTo(QPointF(4.5, 20.5), QPointF(4.5, 12))
+        path.quadTo(QPointF(4.5, 7), QPointF(9.5, 6.5))
         p.drawPath(path)
-        _polyline(p, [(5.5, 3.5), (9.5, 6), (6.5, 9.5)])
+        # 实心三角箭头：禁用态只剩一根弯钩时根本认不出是「撤销」
+        col = p.pen().color()
+        p.save()
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawPolygon([
+            QPointF(5.0, 2.5), QPointF(10.5, 6.5), QPointF(5.5, 10.0)])
+        p.restore()
     elif name == "save":
         p.drawLine(QPointF(12, 3), QPointF(12, 14))
         _polyline(p, [(8.5, 10.5), (12, 14), (15.5, 10.5)])

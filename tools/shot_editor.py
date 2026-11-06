@@ -3,7 +3,8 @@
 
     python tools/shot_editor.py
 
-产出 docs/preview/toolbar.png（16 键工具条 + 选项条 + 表情板）
+产出 docs/preview/toolbar.png（16 键工具条 + 选项条 + 表情板）、
+docs/preview/long_capture.png（手动长图控制条）
 和 docs/preview/editor.png（带各种标注的编辑态）。
 本机会话抓屏全黑，所以内容用 QPainter 造一张假的桌面窗口。
 """
@@ -219,6 +220,15 @@ def main():
     ed._picker.show(); pump(100)
     composite(ed._picker, os.path.join(OUT, "stickers.png"), (222, 224, 228))
     ed._picker.hide()
+    # 手动滚轮长图模式的悬浮控制条
+    from app.long_capture import LongCaptureHUD
+    hud = LongCaptureHUD()
+    hud.set_status(980, 1560, 4, gained=1080)
+    hud.show()
+    pump(120)
+    composite(hud, os.path.join(OUT, "long_capture.png"), (222, 224, 228))
+    hud.hide()
+    hud.deleteLater()
     # 工具条 / 选项条是独立顶层窗口，grab(editor) 抓不到；
     # 用带浮窗的合成才能看出工具条在真实编辑态里的大小和位置。
     composite_with_children(ed, os.path.join(OUT, "editor.png"),

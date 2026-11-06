@@ -208,8 +208,9 @@ class ToolButton(QAbstractButton):
             p.drawRoundedRect(r, 9, 9)
 
         if self.isChecked() and enabled:
-            p.setBrush(_alpha(accent, 44))
-            p.setPen(QPen(_alpha(accent, 125), 1.0))
+            # 选中胶囊描边别太亮：20px 图标旁边一圈高饱和蓝边会抢主体
+            p.setBrush(_alpha(accent, 40))
+            p.setPen(QPen(_alpha(accent, 100), 1.0))
             p.drawRoundedRect(r, 9, 9)
             p.setPen(Qt.NoPen)
             p.setBrush(_alpha(accent, 230))

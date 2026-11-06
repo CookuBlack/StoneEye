@@ -5,7 +5,7 @@
     D:\\App\\Miniconda\\envs\\pyt311\\python.exe sr_check_editor.py
 
 覆盖：图标 16 枚能画出来 / 工具条分组与避让 / 七种标注 / 撤销 /
-     合成输出与 PIL 往返 / 马赛克重建 / 长图拼接 / 动作信号。
+     合成输出与 PIL 往返 / 马赛克重建 / 手动滚轮长图会话 / 动作信号。
 全部在 offscreen 平台跑，不需要真的框选屏幕。
 """
 import os
@@ -30,6 +30,9 @@ from app.capture_toolbar import CaptureToolbar, OptionsBar, StickerPicker, _Sepa
 from app.screen_capture import Rect
 from app.screenshot_editor import ScreenshotEditor, pixmap_to_pil
 from app.scroll_capture import best_shift, stitch
+from app.long_capture import (
+    SAMPLE_MS, LongCaptureHUD, ManualLongCapture, _changed,
+)
 
 FAILS = []
 
@@ -283,6 +286,154 @@ st = stitch([f1, f2])
 check("拼接高度 = 300 + 位移", abs(st.shape[0] - (300 + dy)) <= 4, st.shape)
 check("拼接内容对得上", np.abs(
     st[-dy:].astype(int) - f2[-dy:].astype(int)).mean() < 1.0)
+
+# ---- 4.2 手动滚轮截长图（V4.9.2）----
+print("\n# 4.2 手动滚轮截长图")
+tall2 = np.zeros((900, 120, 3), dtype=np.uint8)
+for y in range(900):
+    tall2[y, :, :] = ((y * 7) % 255, y % 255, (y * 3) % 255)
+
+
+def _feed(frames):
+    it = iter(frames)
+    return lambda: next(it, frames[-1].copy())
+
+
+frames = [tall2[0:300].copy(), tall2[0:300].copy(),
+          tall2[150:450].copy(), tall2[300:600].copy()]
+ms = ManualLongCapture(Rect(0, 0, 120, 300), frame_source=_feed(frames))
+check("会话首帧尺寸", ms.begin() == (300, 120, 3))
+check("画面没动时不拼接", ms.poll() == 0 and ms.segments == 0)
+check("滚一下接上新露出的行",
+      ms.poll() >= 140 and ms.height >= 440 and ms.segments == 1,
+      (ms.height, ms.segments))
+check("再滚一下继续累加",
+      ms.poll() >= 140 and ms.height >= 580 and ms.segments == 2,
+      (ms.height, ms.segments))
+ms_img, ms_segs, ms_gained = ms.finish()
+check("finish 给出增长后的长图",
+      ms_img.size[0] == 120 and ms_img.size[1] >= 580
+      and ms_segs == 2 and ms_gained >= 280,
+      (ms_img.size, ms_segs, ms_gained))
+arr = np.array(ms_img)
+check("长图不是同一帧反复叠加",
+      float(np.abs(arr[:150].astype(int) - arr[-150:].astype(int)).mean()) > 3)
+check("静帧判定准确",
+      not _changed(frames[0], frames[0])
+      and _changed(frames[0], frames[2]))
+
+lim_frames = [tall2[0:300].copy(), tall2[150:450].copy(),
+              tall2[300:600].copy()]
+ms2 = ManualLongCapture(Rect(0, 0, 120, 300),
+                        frame_source=_feed(lim_frames), max_height=400)
+ms2.begin()
+ms2.poll()
+check("到达高度上限后停止拼接",
+      ms2.limited and ms2.height <= 400 and ms2.poll() == 0,
+      (ms2.limited, ms2.height))
+ms2.release()
+
+# 回归：等行高排版 + 只滚 4px。旧实现从 dy=8 起只搜偶数，会被
+# 「下一个行高」骗到，而且 dy<8 会被直接丢掉，这两段内容就永远没了。
+periodic = np.zeros((340, 120, 3), dtype=np.uint8)
+for y in range(340):
+    row = y // 20
+    periodic[y, :, :] = (30 + (row * 37) % 200,
+                         (row * 11) % 255, (y % 20) * 9)
+pp1 = periodic[0:300].copy()
+pp2 = periodic[4:304].copy()
+pd = best_shift(pp1, pp2)
+check("小幅滚动不被整行周期骗到", pd is not None and pd <= 8, pd)
+ps = ManualLongCapture(
+    Rect(0, 0, 120, 300),
+    frame_source=_feed([pp1, pp2, periodic[8:308].copy()]))
+ps.begin()
+check("4px 小位移也会拼接（不再被 dy<8 丢掉）",
+      ps.poll() >= 2 and ps.poll() >= 2 and ps.segments == 2,
+      (ps.segments, ps.height))
+ps.release()
+
+# 静帧不能推进参考帧：中间几帧没动，后面一次大滚动要相对首帧算位移，
+# 否则夹在静帧里的小幅滚动会被永久吞掉。
+hs = ManualLongCapture(
+    Rect(0, 0, 120, 300),
+    frame_source=_feed([tall2[0:300].copy(), tall2[0:300].copy(),
+                        tall2[0:300].copy(), tall2[150:450].copy()]))
+hs.begin()
+hs.poll()
+hs.poll()
+check("静帧不推进参考帧", hs.segments == 0 and hs.height == 300)
+check("静帧之后的大滚动仍按首帧算位移",
+      hs.poll() >= 140 and hs.height >= 440, (hs.height, hs.segments))
+hs.release()
+
+hud = LongCaptureHUD()
+check("HUD 初始是等待滚动", "等待滚动" in hud._stat.text())
+hud.set_status(120, 900, 3, gained=600)
+check("HUD 进度会刷新", "已拼接" in hud._stat.text()
+      and "3 段" in hud._stat.text())
+sig = []
+hud.finishClicked.connect(lambda: sig.append("finish"))
+hud.cancelClicked.connect(lambda: sig.append("cancel"))
+hud._btn_finish.click()
+hud._btn_cancel.click()
+check("HUD 完成 / 取消按钮都发信号", sig == ["finish", "cancel"], sig)
+scr = QRect(0, 0, 1600, 900)
+target = QRect(500, 200, 400, 300)
+overlap = hud.place_outside(target, scr)
+check("HUD 优先摆在选区外",
+      overlap is False
+      and not QRect(hud.pos(), hud.size()).intersects(target),
+      (overlap, hud.pos(), hud.size()))
+check("选区占满屏时标记为重叠", hud.place_outside(scr, scr) is True)
+hud.hide(); hud.deleteLater()
+check("采样间隔 130ms", SAMPLE_MS == 130)
+
+
+def _factory(_rect):
+    seq = [tall2[0:300].copy(), tall2[0:300].copy(),
+           tall2[150:450].copy(), tall2[300:600].copy()]
+    return ManualLongCapture(_rect, frame_source=_feed(seq))
+
+
+le = ScreenshotEditor(base, full, sel, {})
+le._long_factory = _factory
+le._on_action("long")
+check("点截长图进入手动模式",
+      le._long_active and le._long_hud is not None
+      and le._long_timer is not None and le._busy)
+for _ in range(3):
+    le._poll_long()
+check("采样把滚动内容累积进会话",
+      le._long_session is not None and le._long_session.segments == 2,
+      None if le._long_session is None else le._long_session.segments)
+le._finish_long()
+check("完成后长图写回编辑器",
+      le._long_pm is not None and le._long_pm.height() >= 580)
+check("完成后恢复标注态",
+      not le._long_active and le._busy is False
+      and le._long_timer is None and le._long_hud is None)
+le.cleanup()
+app.processEvents()
+
+ce = ScreenshotEditor(base, full, sel, {})
+ce._long_factory = _factory
+ce._on_action("long")
+ce._cancel_long()
+check("取消长图不写回、不残留",
+      ce._long_pm is None and not ce._long_active
+      and ce._busy is False and ce._long_timer is None)
+ce.cleanup()
+app.processEvents()
+
+de = ScreenshotEditor(base, full, sel, {})
+de._long_factory = _factory
+de._on_action("long")
+de.cleanup()
+app.processEvents()
+check("长图模式中途 cleanup 收干净会话",
+      de._long_timer is None and de._long_hud is None
+      and de._long_session is None)
 
 # ---- 4.5 品牌色 / 上浮 / 二次编辑 ----
 print("\n# 4.5 品牌色 / 上浮 / 二次编辑")

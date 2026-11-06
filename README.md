@@ -3,7 +3,7 @@
 框选屏幕任意一块 → OCR 认出画面里的「景别 / 运镜」→ 按句子切分、上色 → 把标注贴回原处并跟着走。
 面向小说转漫画的分镜标注：看得懂「全景 / 中景 / 特写 / 推 / 拉 / 摇 / 移」，也能自己加词表。
 
-当前版本 **4.9.1**。
+当前版本 **4.9.2**。
 
 ---
 
@@ -27,16 +27,25 @@
 | 组 | 功能 |
 |---|---|
 | 基础标注 | 矩形框、圆形 / 椭圆、表情贴纸、箭头、画笔、马赛克、文字 |
-| 进阶智能 | 自动序号（1、2、3…）、OCR 提取文字、截长图 |
+| 进阶智能 | 自动序号（1、2、3…）、OCR 提取文字、滚动截长图（手动滚轮） |
 | 操作 | 撤销、保存、钉在桌面、发送 / 分享、取消（红）、完成（绿） |
 
 - 选中绘制工具后，上方会出现颜色 / 线宽选项条；文字工具另外给 `A-` / `A+` 调字号。
 - 表情工具弹出 20 个表情，选完在选区里点哪贴哪。
 - 马赛克是**真打码**：把底图那块缩到 7×7 再放大回去，不是盖一层半透明色块；撤销可还原。
 - OCR 提取文字复用本项目的 RapidOCR，结果是可一键复制的文本面板。
-- 截长图用 Win32 滚轮事件自动滚 8 帧，按重叠行算位移后拼成一张长图；要求目标窗口
-  能响应滚轮，且滚动期间别动鼠标。长图生成后不能再叠加标注，直接完成 / 保存即可。
+- **滚动截长图（手动）**：点一下工具条上的长图按钮，编辑器和所有标注浮窗立刻隐藏，
+  只剩一条独立的悬浮控制条；鼠标会自动放到选区中心，**由你自己向下滚动滚轮**，
+  滚多少截多少。程序每 130ms 采一帧，按重叠行算出这次滚了多远，只把新露出来的
+  底部接到长图上；控制条实时显示已拼接尺寸和段数。点「完成拼接」生成长图，
+  点「取消」回到标注态；到 24000px 会自动停止增长。要求目标窗口能响应滚轮、
+  选区至少 100px 高，滚动时稍慢一点更容易对齐。长图生成后不能叠加标注，
+  直接完成 / 保存即可。
 - 快捷键：`Ctrl+Z` 撤销、`Ctrl+S` 保存、`Enter` 完成、`Esc` / 右键取消。
+- **4.9.2**：截长图不再自动发滚轮固定抓 8 帧，改成用户手动滚动、程序采样拼接的
+  会话模式；新增独立 topmost 控制条（进度 / 完成 / 取消），编辑器隐藏期间不会被拍进画面。
+- **4.9.2**：重画序号、提取文字、截长图、撤销四个图标（圆形编号气泡、取景框 + 文本行、
+  视窗 + 向下箭头 + 延伸虚线、带实心箭头的回退弧），提亮禁用态图标，柔化选中态描边。
 - **4.9.1**：「提取文字」「截长图」改成点一下就执行的动作按钮（此前被误做成
   复选工具，点了完全没反应）；OCR 结果面板复用同一个窗口、线程收工会兜底解锁
   工具条，截长图失败改用提示条而不是会打乱层级的模态框。
@@ -71,7 +80,8 @@ app/                    核心：采集、OCR、规则、贴图窗、控制面�
   capture_icons.py      工具栏 16 枚线性图标
   capture_toolbar.py    16 键工具条 + 颜色/线宽选项条 + 表情板
   screenshot_editor.py  全屏编辑态、标注撤销栈、合成输出
-  scroll_capture.py     滚轮截长图 + 重叠行拼接
+  scroll_capture.py     长图拼接内核（重叠行求滚动位移）
+  long_capture.py       手动滚轮会话 + 长图模式悬浮控制条
   single_instance.py    命名互斥体 + 本地管道唤起
 installer/setup_app.py  安装 / 卸载程序（向导界面）
 assets/                 图标（app.ico / app.png / icon-source.jpg）
@@ -79,7 +89,7 @@ tools/                  辅助脚本（图标、payload、截图校验）
 build.bat               打包应用（onedir / onefile / clean）
 build_installer.bat     打包安装程序
 sr_check_panel.py       控制面板离屏自检（45+ 项）
-sr_check_editor.py      编辑态 / 品牌色 / 上浮 / 二次编辑离屏自检（60+ 项）
+sr_check_editor.py      编辑态 / 手动长图 / 品牌色 / 二次编辑离屏自检（100+ 项）
 tools/check_zorder.py   真实桌面验证浮窗 Z 序（WindowFromPoint）
 ```
 
@@ -110,7 +120,7 @@ python tools\icon_from_image.py            :: -> assets/app.png + assets/app.ico
 ```bat
 build.bat onedir           :: 文件夹版 -> dist\StoneEye\
 build.bat onefile          :: 单文件版
-build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.1.exe
+build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.2.exe
 ```
 
 `build_installer.bat` 依赖上一步的 `dist\StoneEye`：它会把那份产物压成
@@ -121,7 +131,7 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.1.
 
 ## 安装
 
-双击 `StoneEye_安装程序_v4.9.1.exe`：
+双击 `StoneEye_安装程序_v4.9.2.exe`：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\StoneEye`，免管理员）；
 2. 勾快捷方式 / 开机自启；
@@ -133,8 +143,8 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.1.
 ### 静默安装 / 卸载（部署用）
 
 ```bat
-StoneEye_安装程序_v4.9.1.exe --silent --dir "D:\Apps\StoneEye"
-StoneEye_安装程序_v4.9.1.exe --silent --no-desktop --no-startmenu --autostart
+StoneEye_安装程序_v4.9.2.exe --silent --dir "D:\Apps\StoneEye"
+StoneEye_安装程序_v4.9.2.exe --silent --no-desktop --no-startmenu --autostart
 StoneEye.exe --uninstall --quiet
 ```
 
