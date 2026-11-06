@@ -30,7 +30,10 @@ from PySide6.QtWidgets import (
     QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from .brand import brand_hex, brand_qcolor, draw_selection_frame
+from .brand import (
+    EDGE_BAND, GRIP_HIT, MIN_SELECTION, brand_hex, brand_qcolor,
+    clamp_selection, draw_selection_frame, hit_selection, resize_selection,
+)
 from .capture_toolbar import (
     CaptureToolbar, OptionsBar, StickerPicker, ToolSurface,
 )
@@ -38,8 +41,19 @@ from .capture_icons import CLICK_TOOLS, DRAW_TOOLS
 from .coords import to_logical, to_physical, ui_scale, ui_zoom
 from .screen_capture import Rect, capture
 
-TIP = "拖动绘制   ·   Ctrl+Z 撤销   ·   Ctrl+S 保存   ·   Enter 完成   ·   Esc 取消"
+TIP_MAIN = ("拖边框移动   ·   拖白点改大小   ·   框外可重框   ·   "
+            "Alt+拖动整框移动")
+TIP_KEYS = ("拖动绘制   ·   Ctrl+Z 撤销   ·   Ctrl+S 保存   ·   "
+            "Enter 完成   ·   Esc 取消")
+TIP = TIP_MAIN + "   ·   " + TIP_KEYS       # 兼容旧引用
 SETTLE_MS = 110
+
+_RESIZE_CURSORS = {
+    "nw": Qt.SizeFDiagCursor, "se": Qt.SizeFDiagCursor,
+    "ne": Qt.SizeBDiagCursor, "sw": Qt.SizeBDiagCursor,
+    "n": Qt.SizeVerCursor, "s": Qt.SizeVerCursor,
+    "w": Qt.SizeHorCursor, "e": Qt.SizeHorCursor,
+}
 
 # --- Windows Z 序 ---------------------------------------------------------
 # 编辑器是全屏 topmost 窗口，工具条 / 选项条 / 表情板 / OCR 面板是另外几个
@@ -276,6 +290,10 @@ class ScreenshotEditor(QWidget):
         self._long_overlap = False
         # 可选注入点：离屏自检用合成帧喂会话，不必真的抓屏
         self._long_factory = None
+        # 选区调整会话（V4.9.3）：None 或
+        # {"mode": resize/move/draw, "handle", "start", "origin", "rect"}
+        self._adjust = None
+        self._cursor_kind = "tool"
 
         self._mosaic_pm = QPixmap(screen_pm.size())
         self._mosaic_pm.fill(Qt.transparent)
@@ -526,6 +544,7 @@ class ScreenshotEditor(QWidget):
         # 点击型工具给手型，拖拽型给十字，动作按钮不再进入这里
         self.setCursor(Qt.PointingHandCursor if tool in CLICK_TOOLS
                        else Qt.CrossCursor)
+        self._cursor_kind = "tool:"
         self.update()
 
     def _set_color(self, value):
@@ -611,6 +630,9 @@ class ScreenshotEditor(QWidget):
         self._finish("save" if ok else "cancel", pm, path)
 
     def _finish(self, action, pixmap=None, path=""):
+        # 拖动到一半被快捷键结束时也要把候选选区定下来，别拿旧框出图
+        if self._adjust is not None:
+            self._end_adjust(commit=True)
         # 万一从别处（托盘 / 快捷键）在长图模式里结束了截图，先收干净会话
         if self._long_active:
             self._end_long_mode(resume=False)
@@ -826,24 +848,32 @@ class ScreenshotEditor(QWidget):
                 p.restore()
             self._draw_annotations(p)
 
+        active = (self._adjust["handle"]
+                  if self._adjust is not None
+                  and self._adjust["mode"] == "resize" else None)
         draw_selection_frame(p, QRectF(s).adjusted(0.5, 0.5, -0.5, -0.5),
-                             width=2.6)
+                             width=2.6, grips=self._can_adjust(),
+                             active_grip=active, grip_scale=self._zoom)
+        if self._adjust is not None:
+            self._paint_adjust_size(p)
         self._paint_tip(p)
 
     def _paint_tip(self, p):
+        keys = ""
         if getattr(self, "_is_reedit", False):
             label = "继续标注   ·   Ctrl+Z 撤销   ·   Enter 写回原贴图   ·   Esc 取消"
         elif self._long_pm is not None:
             label = "长图已生成 · 点 ✔ 完成 / ⬇ 保存"
         else:
-            label = TIP
+            label, keys = TIP_MAIN, TIP_KEYS
         f = QFont()
         f.setPointSize(9)
         f.setBold(True)
         p.setFont(f)
         fm = QFontMetrics(f)
-        w = fm.horizontalAdvance(label) + 24
-        h = fm.height() + 10
+        w = max(fm.horizontalAdvance(label), fm.horizontalAdvance(keys)) + 28
+        lh = fm.height() + 3
+        h = lh * (2 if keys else 1) + 12
         x = max(4, min(self._sel.left(), self.width() - w - 4))
         y = self._sel.top() - h - 6
         if y < 4:
@@ -856,9 +886,15 @@ class ScreenshotEditor(QWidget):
         p.drawRoundedRect(QRectF(x, y, w, h), 6, 6)
         p.setPen(Qt.NoPen)
         p.setBrush(accent)
-        p.drawEllipse(QRectF(x + 7, y + h / 2 - 2, 4, 4))
+        # 小圆点只跟第一行对齐，别孤零零落在两行中间
+        p.drawEllipse(QRectF(x + 8, y + 6 + lh / 2 - 2, 4, 4))
         p.setPen(QColor(235, 245, 255))
-        p.drawText(QRectF(x, y, w, h), Qt.AlignCenter, label)
+        p.drawText(QRectF(x + 14, y + 6, w - 14, lh),
+                   Qt.AlignCenter, label)
+        if keys:
+            p.setPen(QColor(186, 199, 216))
+            p.drawText(QRectF(x + 14, y + 6 + lh, w - 14, lh),
+                       Qt.AlignCenter, keys)
 
     def _draw_annotations(self, p: QPainter):
         p.save()
@@ -960,6 +996,142 @@ class ScreenshotEditor(QWidget):
                                             Qt.FastTransformation))
                 p.end()
 
+    # ---------- 选区调整（V4.9.3）----------
+    # 框选松开后立刻进入编辑态，框一直在屏幕上，所以「二次调整」就放在
+    # 这里，不需要用户多点一步「确认」。三种手势：
+    #   8 个白点    -> 改大小（四角同时改两条边）
+    #   边框窄带    -> 整体移动；框内 Alt+拖动同样可以移动
+    #   选区外拖动  -> 重新框一个选区，不用取消重来
+    # 剩下的框内区域仍然归标注工具，两边不打架。
+    def _can_adjust(self) -> bool:
+        # 二次编辑的底图是深色编辑台，改选区会截到台面；长图 / 忙碌 /
+        # 已出结果时也不该再动裁切框。
+        return (not getattr(self, "_is_reedit", False)
+                and self._long_pm is None and not self._long_active
+                and not self._busy and self._result is None)
+
+    def _hit(self, pt):
+        if not self._can_adjust():
+            return None, ""
+        z = self._zoom
+        return hit_selection(QPointF(pt), self._sel,
+                             radius=GRIP_HIT * z, band=EDGE_BAND * z)
+
+    def _min_sel(self):
+        return MIN_SELECTION * self._zoom
+
+    def _sync_selection(self, place: bool = True):
+        """逻辑选区 -> 物理裁切框，并让工具条 / 选项条跟着新选区摆位。
+
+        拖动过程也重摆：只 move 顶层窗口、不改 Z 序，比「松开后突然跳
+        一下」顺眼得多，也不会把鼠标隐式捕获交给工具条。
+        """
+        s = self._sel
+        gx = s.left() + self._geom.left()
+        gy = s.top() + self._geom.top()
+        px, py, pw, ph = to_physical(gx, gy, s.width(), s.height())
+        self._sel_phys = Rect(px, py, pw, ph)
+        self._crop = QRect(round(px - self._full.x),
+                           round(py - self._full.y), pw, ph)
+        if place and self._toolbar is not None:
+            self._place_children()
+        self.update()
+
+    def _tool_cursor(self):
+        return (Qt.PointingHandCursor if self._tool in CLICK_TOOLS
+                else Qt.CrossCursor)
+
+    def _update_cursor(self, pt):
+        a = self._adjust
+        if a is not None:
+            mode, handle = a["mode"], a["handle"]
+            if mode == "resize":
+                cur = _RESIZE_CURSORS.get(handle, Qt.CrossCursor)
+            elif mode == "move":
+                cur = Qt.SizeAllCursor
+            else:
+                cur = Qt.CrossCursor
+            kind = "%s:%s" % (mode, handle)
+        else:
+            mode, handle = self._hit(pt)
+            if mode == "resize":
+                kind, cur = "resize:" + handle, _RESIZE_CURSORS[handle]
+            elif mode == "move":
+                kind, cur = "move:", Qt.SizeAllCursor
+            elif self._can_adjust() and not self._sel.contains(pt):
+                kind, cur = "draw:", Qt.CrossCursor
+            else:
+                kind, cur = "tool:", self._tool_cursor()
+        if kind != self._cursor_kind:
+            self._cursor_kind = kind
+            self.setCursor(cur)
+
+    def _begin_adjust(self, pt, mode, handle=""):
+        self._draft = None
+        self._adjust = {
+            "mode": mode, "handle": handle,
+            "start": QRect(self._sel), "origin": QPoint(pt),
+            "rect": QRect(self._sel),
+        }
+        self._apply_adjust(pt)
+
+    def _apply_adjust(self, pt):
+        a = self._adjust
+        if a is None:
+            return
+        d = QPointF(pt - a["origin"])
+        mode = a["mode"]
+        if mode == "resize":
+            rect = resize_selection(a["start"], a["handle"], d,
+                                    self.rect(), self._min_sel())
+        elif mode == "move":
+            rect = clamp_selection(
+                a["start"].translated(round(d.x()), round(d.y())),
+                self.rect(), self._min_sel())
+        else:                                   # draw：框外拖出新选区
+            x1, y1 = a["origin"].x(), a["origin"].y()
+            x2, y2 = pt.x(), pt.y()
+            w, h = abs(x2 - x1), abs(y2 - y1)
+            if w < self._min_sel() or h < self._min_sel():
+                rect = QRect(a["start"])         # 手抖 / 只是点了下暗区
+            else:
+                rect = clamp_selection(
+                    QRect(min(x1, x2), min(y1, y2), w, h),
+                    self.rect(), self._min_sel())
+        a["rect"] = rect
+        self._sel = rect
+        self._sync_selection(place=True)
+
+    def _end_adjust(self, commit: bool = True):
+        a = self._adjust
+        if a is None:
+            return
+        self._adjust = None
+        self._sel = QRect(a["rect"] if commit else a["start"])
+        self._sync_selection()
+        self._cursor_kind = ""                   # 强制下一次 move 重设光标
+
+    def _paint_adjust_size(self, p: QPainter):
+        s = self._sel
+        label = "%d × %d" % (round(s.width() * self._scale),
+                             round(s.height() * self._scale))
+        f = QFont()
+        f.setPointSize(9)
+        f.setBold(True)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        w, h = fm.horizontalAdvance(label) + 18, fm.height() + 8
+        x = max(4, min(s.right() - w - 10, self.width() - w - 4))
+        y = max(4, min(s.bottom() - h - 10, self.height() - h - 4))
+        accent = brand_qcolor()
+        rim = QColor(accent)
+        rim.setAlpha(150)
+        p.setPen(QPen(rim, 1.0))
+        p.setBrush(QColor(18, 20, 26, 232))
+        p.drawRoundedRect(QRectF(x, y, w, h), 6, 6)
+        p.setPen(QColor(240, 248, 255))
+        p.drawText(QRectF(x, y, w, h), Qt.AlignCenter, label)
+
     # ---------- 鼠标 ----------
     def mousePressEvent(self, event):
         # 点画布会把编辑器激活到前台，顺手把浮窗捞回最上层
@@ -970,6 +1142,20 @@ class ScreenshotEditor(QWidget):
         if event.button() != Qt.LeftButton or self._busy:
             return
         pt = _pos(event)
+
+        if self._can_adjust():
+            mode, handle = self._hit(pt)
+            if mode is None and event.modifiers() & Qt.AltModifier \
+                    and self._sel.contains(pt):
+                mode = "move"                    # 框内任意位置也能整框拖动
+            elif mode is None and not self._sel.contains(pt):
+                mode = "draw"                    # 暗区按下 = 重新框选
+            if mode is not None:
+                self._begin_adjust(pt, mode, handle)
+                self._update_cursor(pt)
+                event.accept()
+                return
+
         if not self._sel.contains(pt):
             return
         if self._long_pm is not None:
@@ -1001,9 +1187,13 @@ class ScreenshotEditor(QWidget):
         self.update()
 
     def mouseMoveEvent(self, event):
-        if self._draft is None:
-            return
         pt = _pos(event)
+        if self._adjust is not None:
+            self._apply_adjust(pt)
+            return
+        if self._draft is None:
+            self._update_cursor(pt)
+            return
         kind = self._draft["kind"]
         if kind in ("rect", "ellipse", "arrow"):
             self._draft["p2"] = pt
@@ -1015,7 +1205,19 @@ class ScreenshotEditor(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() != Qt.LeftButton or self._draft is None:
+        if event.button() != Qt.LeftButton:
+            return
+        if self._adjust is not None:
+            a = self._adjust
+            changed = a["rect"] != a["start"]
+            self._end_adjust(commit=True)
+            if changed:
+                self._toast("选区 %d × %d  ·  可继续标注或再调整"
+                            % (round(self._sel.width() * self._scale),
+                               round(self._sel.height() * self._scale)))
+            self._update_cursor(_pos(event))
+            return
+        if self._draft is None:
             return
         d = self._draft
         self._draft = None
@@ -1081,6 +1283,10 @@ class ScreenshotEditor(QWidget):
         key = event.key()
         mods = event.modifiers()
         if key == Qt.Key_Escape:
+            if self._adjust is not None:
+                self._end_adjust(commit=False)
+                self._toast("已还原选区")
+                return
             if self._long_active:
                 self._cancel_long()
                 return

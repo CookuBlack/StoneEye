@@ -235,6 +235,21 @@ def main():
                             (236, 238, 242))
     ed._compose().save(os.path.join(OUT, "editor_result.png"), "PNG")
     print("saved", os.path.join(OUT, "editor_result.png"))
+
+    # 选区调整中：按住右下手柄往外拖，展示高亮手柄 + 实时尺寸标签
+    from app.brand import selection_grips
+    grip = selection_grips(ed._sel)["se"]
+    p0 = QPoint(round(grip.x()), round(grip.y()))
+    p1 = QPoint(p0.x() + 90, p0.y() + 60)
+    press(ed, p0)
+    move(ed, p1)
+    ed.update()
+    pump(150)
+    composite_with_children(ed, os.path.join(OUT, "selection_adjust.png"),
+                            (236, 238, 242))
+    release(ed, p1)
+    ed.update()
+
     ed._hide_children()
     ed.hide()
 

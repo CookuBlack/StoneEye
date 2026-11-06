@@ -4,6 +4,10 @@
 交互只有一种：**按住左键拖动**，松开确认。Esc 或右键取消。
 不再做任何窗口自动识别 / 预测框（V3.7 的智能预测实测不可用，已移除）。
 
+V4.9.3：松开后立刻进入截图编辑态，同一个框仍留在屏幕上，8 个白色手柄
+可以继续拖动 / 调整大小，所以框选阶段刻意不加「确认」按钮，不多一步操作。
+这里画的 8 个手柄和编辑态共用 `brand.selection_grips`。
+
 覆盖整个虚拟桌面（多显示器并集），选区做「挖空」处理以便看清原内容。
 select() 用局部 QEventLoop 阻塞等待，返回物理像素 Rect 或 None。
 
@@ -30,8 +34,8 @@ from .screen_capture import Rect
 _MASK_ALPHA = 112
 _CAPTURE_DELAY_MS = 120
 _MIN_SELECT = 6               # 小于这个尺寸视为误点，直接取消
-_TIP_IDLE = "按住鼠标左键拖动选择区域   ·   Esc / 右键取消"
-_TIP_DRAG = "松开确认选区   ·   Esc 取消"
+_TIP_IDLE = "按住左键拖出选区   ·   松开后仍可拖动 / 调整   ·   Esc 取消"
+_TIP_DRAG = "松开确认   ·   之后拖边框移动、拖白点改大小   ·   Esc 取消"
 
 
 def _global_pos(event):
@@ -95,7 +99,7 @@ class RegionSelector(QWidget):
 
                 draw_selection_frame(
                     p, QRectF(local).adjusted(0.5, 0.5, -0.5, -0.5),
-                    width=3.0)
+                    width=3.0, grips=True)
                 self._paint_size(p, rect, local)
 
         self._paint_tip(p)

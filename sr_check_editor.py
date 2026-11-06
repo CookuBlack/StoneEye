@@ -5,7 +5,8 @@
     D:\\App\\Miniconda\\envs\\pyt311\\python.exe sr_check_editor.py
 
 覆盖：图标 16 枚能画出来 / 工具条分组与避让 / 七种标注 / 撤销 /
-     合成输出与 PIL 往返 / 马赛克重建 / 手动滚轮长图会话 / 动作信号。
+     合成输出与 PIL 往返 / 马赛克重建 / 手动滚轮长图会话 / 动作信号 /
+     选区八向手柄拖动、移动、框外重选与裁切同步。
 全部在 offscreen 平台跑，不需要真的框选屏幕。
 """
 import os
@@ -496,6 +497,144 @@ check("新标注落在正确位置", any(
     rimg.pixelColor(x, 120).blue() > rimg.pixelColor(x, 120).red() + 30
     for x in range(120, 290)))
 re.cleanup()
+app.processEvents()
+
+# ---- 4.8 选区拖动 / 二次调整（V4.9.3）----
+print("\n# 4.8 选区拖动 / 二次调整")
+from PySide6.QtGui import QKeyEvent
+from app.brand import (
+    MIN_SELECTION, clamp_selection, hit_selection, resize_selection,
+    selection_grips,
+)
+
+g0 = QRect(100, 80, 400, 300)
+gp = selection_grips(g0)
+check("手柄 8 个", len(gp) == 8, len(gp))
+# QRectF 用半开边界：right = left + width = 500（QRect.right() 是 499）
+check("四角落在边框上",
+      gp["nw"] == QPointF(100, 80) and gp["se"] == QPointF(500, 380))
+check("角点命中 resize", hit_selection(gp["se"], g0) == ("resize", "se"))
+check("边中点命中 resize", hit_selection(gp["n"], g0)[0] == "resize")
+check("边框带命中 move",
+      hit_selection(QPointF(200, 82), g0) == ("move", ""))
+check("框内不触发调整", hit_selection(QPointF(300, 230), g0)[0] is None)
+check("框外不触发调整", hit_selection(QPointF(20, 20), g0)[0] is None)
+
+check("东手柄只改宽", resize_selection(g0, "e", QPointF(60, 0)).width() == 460)
+check("西手柄左移且变宽",
+      resize_selection(g0, "w", QPointF(-50, 0)).left() == 50
+      and resize_selection(g0, "w", QPointF(-50, 0)).width() == 450)
+rnw = resize_selection(g0, "nw", QPointF(-20, -30))
+check("西北同时改两条边",
+      (rnw.left(), rnw.top(), rnw.width(), rnw.height()) == (80, 50, 420, 330),
+      rnw)
+check("缩到底不小于最小边",
+      resize_selection(g0, "e", QPointF(-1000, 0)).width() >= MIN_SELECTION)
+rse = resize_selection(g0, "se", QPointF(30, 20), QRect(0, 0, 520, 420))
+check("拖出边界被钳制",
+      rse.left() + rse.width() <= 520 and rse.top() + rse.height() <= 420,
+      rse)
+rmv = clamp_selection(QRect(-50, -30, 400, 300), QRect(0, 0, 1600, 900))
+check("移动不会拖出屏幕左上",
+      (rmv.left(), rmv.top(), rmv.width(), rmv.height()) == (0, 0, 400, 300))
+
+b2 = QPixmap(1600, 900)
+b2.fill(QColor(210, 214, 220))
+ae = ScreenshotEditor(b2, Rect(0, 0, 1600, 900), Rect(100, 80, 400, 300), {})
+ae.setGeometry(0, 0, 1600, 900)
+ae._geom = QRect(0, 0, 1600, 900)
+check("编辑器允许调整选区", ae._can_adjust() is True)
+check("初始选区", ae._sel == g0, ae._sel)
+
+# 先放一个标注：调整选区不该把它清掉
+ae._set_tool("number")
+_press(ae, QPoint(220, 210))
+_release(ae, QPoint(220, 210))
+check("标注已建立", len(ae._items) == 1)
+
+# 拖右下角放大
+cp = QPoint(round(gp["se"].x()), round(gp["se"].y()))
+_press(ae, cp)
+check("按下进入 resize 会话",
+      ae._adjust is not None and ae._adjust["mode"] == "resize")
+_move(ae, QPoint(cp.x() + 80, cp.y() + 60))
+_release(ae, QPoint(cp.x() + 80, cp.y() + 60))
+check("拖东南角改大小", ae._sel == QRect(100, 80, 480, 360), ae._sel)
+check("调整会话已清理", ae._adjust is None)
+check("裁切框同步", ae._crop == QRect(100, 80, 480, 360), ae._crop)
+check("物理选区同步", (ae._sel_phys.w, ae._sel_phys.h) == (480, 360))
+check("标注在调整后保留", len(ae._items) == 1)
+check("输出尺寸跟随新选区",
+      (ae._compose().width(), ae._compose().height()) == (480, 360))
+
+# 拖边框整体移动（避开边中点手柄）
+_press(ae, QPoint(200, 82))
+check("边框按下进入 move 会话",
+      ae._adjust is not None and ae._adjust["mode"] == "move")
+_move(ae, QPoint(240, 112))
+_release(ae, QPoint(240, 112))
+check("拖边框移动且尺寸不变", ae._sel == QRect(140, 110, 480, 360), ae._sel)
+check("移动后裁切框同步", ae._crop == QRect(140, 110, 480, 360), ae._crop)
+
+# Alt + 框内拖动也能整框移动
+def _press_alt(widget, pt):
+    widget.mousePressEvent(QMouseEvent(
+        QEvent.MouseButtonPress, QPointF(pt), Qt.LeftButton, Qt.LeftButton,
+        Qt.AltModifier))
+
+
+_press_alt(ae, QPoint(300, 250))
+_move(ae, QPoint(350, 280))
+_release(ae, QPoint(350, 280))
+check("Alt+框内拖动移动", ae._sel == QRect(190, 140, 480, 360), ae._sel)
+
+# 框内普通点击仍然归标注工具
+ae._set_tool("rect")
+_press(ae, QPoint(300, 250))
+check("框内点击不抢走绘制",
+      ae._adjust is None and ae._draft is not None)
+_release(ae, QPoint(360, 300))
+
+# 框外拖出全新选区
+_press(ae, QPoint(1000, 600))
+check("框外按下进入 draw 会话",
+      ae._adjust is not None and ae._adjust["mode"] == "draw")
+_move(ae, QPoint(1300, 800))
+_release(ae, QPoint(1300, 800))
+check("框外重选生效", ae._sel == QRect(1000, 600, 300, 200), ae._sel)
+check("重选后物理选区同步", (ae._sel_phys.w, ae._sel_phys.h) == (300, 200))
+
+# Esc 在调整中还原而不是直接取消整张截图
+ng = selection_grips(ae._sel)["nw"]
+np_ = QPoint(round(ng.x()), round(ng.y()))
+_press(ae, np_)
+_move(ae, QPoint(np_.x() - 60, np_.y() - 40))
+ae.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+check("Esc 还原选区而非取消截图",
+      ae._adjust is None and ae._sel == QRect(1000, 600, 300, 200)
+      and ae._result is None, ae._sel)
+
+# 二次编辑 / 长图已生成时禁用调整
+ae._long_pm = QPixmap(12, 12)
+check("长图已生成时禁用调整", ae._can_adjust() is False)
+ae._long_pm = None
+re2 = ScreenshotEditor.for_image(b2, {})
+check("二次编辑禁用调整", re2._can_adjust() is False)
+check("二次编辑不命中手柄", re2._hit(QPoint(200, 200)) == (None, ""))
+re2.cleanup()
+app.processEvents()
+
+# 8 个手柄真的画出来了
+gpm = QPixmap(220, 160)
+gpm.fill(QColor(28, 30, 36))
+gq = QPainter(gpm)
+draw_selection_frame(gq, QRectF(20, 20, 160, 100), grips=True)
+gq.end()
+gimg = gpm.toImage()
+lit = sum(1 for c in selection_grips(QRectF(20, 20, 160, 100)).values()
+          if gimg.pixelColor(round(c.x()), round(c.y())).red() > 220)
+check("8 个白色手柄都画出来", lit == 8, lit)
+ae.cleanup()
 app.processEvents()
 
 # ---- 5. 收尾 ----

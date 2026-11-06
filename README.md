@@ -3,7 +3,7 @@
 框选屏幕任意一块 → OCR 认出画面里的「景别 / 运镜」→ 按句子切分、上色 → 把标注贴回原处并跟着走。
 面向小说转漫画的分镜标注：看得懂「全景 / 中景 / 特写 / 推 / 拉 / 摇 / 移」，也能自己加词表。
 
-当前版本 **4.9.2**。
+当前版本 **4.9.3**。
 
 ---
 
@@ -30,6 +30,10 @@
 | 进阶智能 | 自动序号（1、2、3…）、OCR 提取文字、滚动截长图（手动滚轮） |
 | 操作 | 撤销、保存、钉在桌面、发送 / 分享、取消（红）、完成（绿） |
 
+- **选区可二次调整**：框选松开后不用再点确认，编辑态里框还在。拖 8 个白色手柄
+  改大小（四角同时改两条边）、拖边框或 `Alt`+框内拖动整框移动、在暗区拖一下
+  重新框选；裁切范围、工具条位置和输出尺寸实时跟着变，已有标注按屏幕位置保留，
+  拖动中按 `Esc` 还原。二次编辑与长图生成后自动锁定选区。
 - 选中绘制工具后，上方会出现颜色 / 线宽选项条；文字工具另外给 `A-` / `A+` 调字号。
 - 表情工具弹出 20 个表情，选完在选区里点哪贴哪。
 - 马赛克是**真打码**：把底图那块缩到 7×7 再放大回去，不是盖一层半透明色块；撤销可还原。
@@ -42,6 +46,9 @@
   选区至少 100px 高，滚动时稍慢一点更容易对齐。长图生成后不能叠加标注，
   直接完成 / 保存即可。
 - 快捷键：`Ctrl+Z` 撤销、`Ctrl+S` 保存、`Enter` 完成、`Esc` / 右键取消。
+- **4.9.3**：框选层与编辑态统一显示 8 个白色手柄，支持拖手柄改大小、拖边框 /
+  `Alt`+拖动移动整框、框外拖出新选区；拖动中实时同步物理裁切框与输出尺寸，
+  提示条改双行（交互提示 + 快捷键）。
 - **4.9.2**：截长图不再自动发滚轮固定抓 8 帧，改成用户手动滚动、程序采样拼接的
   会话模式；新增独立 topmost 控制条（进度 / 完成 / 取消），编辑器隐藏期间不会被拍进画面。
 - **4.9.2**：重画序号、提取文字、截长图、撤销四个图标（圆形编号气泡、取景框 + 文本行、
@@ -61,7 +68,7 @@
   点画布绘制、换颜色、切工具、弹窗返回之后都稳定浮在最上层（4.9.0 修复了
   「点一下工具条就消失」）。
 - 框选边框、编辑态选区、贴图外框统一从应用图标提取主色（亮蓝），线宽加粗，
-  带外发光与四角把手。`config.json` 的 `sticker.border_color` 留空即跟随图标，
+  带外发光；选区另外有 8 个白色可拖动手柄。`config.json` 的 `sticker.border_color` 留空即跟随图标，
   写 `#RRGGBB` 可覆盖（旧版写死的 `#00E5FF` 会自动迁移成跟随图标）。
 - 快照贴图相对源区域上浮 `sticker.float_lift`（默认 14 逻辑像素），露出下沿的
   原画面，一眼能分清「贴图」和屏幕；设为 `0` 则完全原位贴合。
@@ -76,7 +83,7 @@ app/                    核心：采集、OCR、规则、贴图窗、控制面�
   ui_shell.py           无边框浮窗外壳（圆角 + 投影 + 入场动画）
   ui_theme.py           配色 / 圆角 / 字号规范
   ui_widgets.py         自绘控件（线性图标、胶囊开关、分段控件）
-  brand.py              从 app.png 提取图标主色 + 统一选区框画法
+  brand.py              图标主色 + 统一选区框 + 八向手柄几何 / 命中 / 绘制
   capture_icons.py      工具栏 16 枚线性图标
   capture_toolbar.py    16 键工具条 + 颜色/线宽选项条 + 表情板
   screenshot_editor.py  全屏编辑态、标注撤销栈、合成输出
@@ -89,7 +96,7 @@ tools/                  辅助脚本（图标、payload、截图校验）
 build.bat               打包应用（onedir / onefile / clean）
 build_installer.bat     打包安装程序
 sr_check_panel.py       控制面板离屏自检（45+ 项）
-sr_check_editor.py      编辑态 / 手动长图 / 品牌色 / 二次编辑离屏自检（100+ 项）
+sr_check_editor.py      编辑态 / 手动长图 / 选区调整 / 二次编辑离屏自检（150+ 项）
 tools/check_zorder.py   真实桌面验证浮窗 Z 序（WindowFromPoint）
 ```
 
@@ -120,7 +127,7 @@ python tools\icon_from_image.py            :: -> assets/app.png + assets/app.ico
 ```bat
 build.bat onedir           :: 文件夹版 -> dist\StoneEye\
 build.bat onefile          :: 单文件版
-build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.2.exe
+build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.3.exe
 ```
 
 `build_installer.bat` 依赖上一步的 `dist\StoneEye`：它会把那份产物压成
@@ -131,7 +138,7 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.2.
 
 ## 安装
 
-双击 `StoneEye_安装程序_v4.9.2.exe`：
+双击 `StoneEye_安装程序_v4.9.3.exe`：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\StoneEye`，免管理员）；
 2. 勾快捷方式 / 开机自启；
@@ -143,8 +150,8 @@ build_installer.bat        :: 安装程序 -> dist\StoneEye_安装程序_v4.9.2.
 ### 静默安装 / 卸载（部署用）
 
 ```bat
-StoneEye_安装程序_v4.9.2.exe --silent --dir "D:\Apps\StoneEye"
-StoneEye_安装程序_v4.9.2.exe --silent --no-desktop --no-startmenu --autostart
+StoneEye_安装程序_v4.9.3.exe --silent --dir "D:\Apps\StoneEye"
+StoneEye_安装程序_v4.9.3.exe --silent --no-desktop --no-startmenu --autostart
 StoneEye.exe --uninstall --quiet
 ```
 

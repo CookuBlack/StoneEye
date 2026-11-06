@@ -234,6 +234,14 @@ def _smoke() -> int:
                 "_cancel_long", "_end_long_mode")), "手动滚轮长图链路"),
             (not hasattr(__import__("app.scroll_capture", fromlist=["x"]),
                          "capture_long"), "自动滚轮抓取已移除"),
+            # V4.9.3：选区拖动 / 八向手柄
+            (all(hasattr(se.ScreenshotEditor, n) for n in (
+                "_can_adjust", "_hit", "_sync_selection", "_begin_adjust",
+                "_apply_adjust", "_end_adjust")), "选区拖动与二次调整"),
+            (all(hasattr(__import__("app.brand", fromlist=["x"]), n)
+                 for n in ("selection_grips", "hit_selection",
+                           "resize_selection", "clamp_selection",
+                           "draw_selection_grips")), "八向手柄几何与绘制"),
         )
         for ok, label in extra:
             lines.append(("OK   " if ok else "FAIL ") + label)

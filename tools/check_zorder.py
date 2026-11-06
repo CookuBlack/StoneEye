@@ -178,6 +178,31 @@ def main():
     print("%-20s 工具条按钮点击 %s" % ("按钮可用", "OK" if btn_ok else "失效"))
     results.append(("按钮可用", btn_ok))
 
+    # 6.5) V4.9.3：真的拖一次右下手柄改选区，看裁切框同步 + 浮窗重新摆位
+    from app.brand import selection_grips
+    grip = selection_grips(ed._sel)["se"]
+
+    def send_mouse(typ, pt):
+        app.sendEvent(ed, QMouseEvent(typ, pt, pt, Qt.LeftButton,
+                                      Qt.LeftButton, Qt.NoModifier))
+
+    p0 = QPointF(grip.x(), grip.y())
+    p1 = QPointF(grip.x() + 60, grip.y() + 40)
+    before = (ed._sel.width(), ed._sel.height())
+    send_mouse(QEvent.MouseButtonPress, p0)
+    send_mouse(QEvent.MouseMove, p1)
+    send_mouse(QEvent.MouseButtonRelease, p1)
+    pump(app, 220)
+    grew = (ed._sel.width() > before[0] and ed._sel.height() > before[1]
+            and ed._crop.width() == ed._sel_phys.w
+            and ed._crop.height() == ed._sel_phys.h)
+    print("%-20s %dx%d -> %dx%d %s" % (
+        "拖手柄改选区", before[0], before[1],
+        ed._sel.width(), ed._sel.height(), "OK" if grew else "几何不同步"))
+    results.append(("拖手柄改选区", grew))
+    activate_editor()
+    results.append(("改选区后浮窗", probe("改选区后浮窗")))
+
     ed._hide_children()
     ed.hide()
     ed.cleanup()
