@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-StoneEye —— Windows 截图 / 标注 / OCR 整句标注 + 贴图工具（V4.8.1）
+StoneEye —— Windows 截图 / 标注 / OCR 整句标注 + 贴图工具（V4.9.0）
 启动入口。
 
 【交互模型】
@@ -192,9 +192,9 @@ def _smoke() -> int:
     """打包后验证运行时延迟导入的模块都在包里（结果写 smoke.log）。"""
     import importlib
     names = (
-        "app.single_instance", "app.capture_icons", "app.capture_toolbar",
-        "app.screenshot_editor", "app.scroll_capture", "app.tray_app",
-        "PySide6.QtNetwork",
+        "app.brand", "app.single_instance", "app.capture_icons",
+        "app.capture_toolbar", "app.screenshot_editor", "app.scroll_capture",
+        "app.tray_app", "PySide6.QtNetwork",
     )
     lines, bad = [], []
     for name in names:

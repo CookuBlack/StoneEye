@@ -23,6 +23,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget, QApplication
 
+from .brand import brand_qcolor, draw_selection_frame
 from .coords import to_physical
 from .screen_capture import Rect
 
@@ -92,9 +93,9 @@ class RegionSelector(QWidget):
                 p.fillRect(local, QColor(0, 0, 0, 0))
                 p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
-                p.setPen(QPen(QColor(0, 229, 255), 2))
-                p.setBrush(Qt.NoBrush)
-                p.drawRect(local.adjusted(0, 0, -1, -1))
+                draw_selection_frame(
+                    p, QRectF(local).adjusted(0.5, 0.5, -0.5, -0.5),
+                    width=3.0)
                 self._paint_size(p, rect, local)
 
         self._paint_tip(p)
@@ -122,9 +123,15 @@ class RegionSelector(QWidget):
         h = fm.height() + 12
         x = (self.width() - w) // 2
         y = 24
-        p.setPen(QPen(Qt.NoPen))
-        p.setBrush(QColor(18, 20, 26, 215))
-        p.drawRoundedRect(QRectF(x, y, w, h), 6, 6)
+        accent = brand_qcolor()
+        rim = QColor(accent)
+        rim.setAlpha(95)
+        p.setPen(QPen(rim, 1.0))
+        p.setBrush(QColor(18, 20, 26, 226))
+        p.drawRoundedRect(QRectF(x, y, w, h), 7, 7)
+        p.setPen(Qt.NoPen)
+        p.setBrush(accent)
+        p.drawEllipse(QRectF(x + 8, y + h / 2 - 2, 4, 4))
         p.setPen(QColor(235, 245, 255))
         p.drawText(QRectF(x, y, w, h), Qt.AlignCenter, tip)
 
@@ -142,10 +149,13 @@ class RegionSelector(QWidget):
         y = local.top() - h - 6
         if y < 0:
             y = min(local.top() + 6, p.window().height() - h - 2)
-        p.setPen(QPen(Qt.NoPen))
-        p.setBrush(QColor(18, 20, 26, 220))
-        p.drawRoundedRect(QRectF(x, y, w, h), 5, 5)
-        p.setPen(QColor(235, 245, 255))
+        accent = brand_qcolor()
+        rim = QColor(accent)
+        rim.setAlpha(120)
+        p.setPen(QPen(rim, 1.0))
+        p.setBrush(QColor(18, 20, 26, 230))
+        p.drawRoundedRect(QRectF(x, y, w, h), 6, 6)
+        p.setPen(accent)
         p.drawText(QRectF(x, y, w, h), Qt.AlignCenter, label)
 
     # ---------- 鼠标 / 键盘 ----------

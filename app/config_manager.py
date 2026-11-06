@@ -109,7 +109,10 @@ DEFAULT_CONFIG = {
         "source_offset": 24,       # live 模式 / place_at_source=false 时的错位距离
         # 原位粘贴时画面和背景长得一样，必须画一圈边框才知道「这里被截下来了」
         "show_border": True,
-        "border_color": "#00E5FF",
+        # 留空 = 自动取应用图标主色（app/brand.py）；也可写 #RRGGBB 覆盖
+        "border_color": "",
+        # 快照贴图相对源区域向上浮起的逻辑像素（0 = 完全原位贴合）
+        "float_lift": 14,
         # 出现时闪一下（描边高亮 + 轻微淡入），让人一眼看到截下来的区域
         "flash_on_create": True,
     },
@@ -241,8 +244,13 @@ def _sanitize(cfg: dict) -> dict:
     _as_int(st, "source_offset", 24, 0, 400)
     st["show_border"] = bool(st.get("show_border", True))
     st["flash_on_create"] = bool(st.get("flash_on_create", True))
-    bc = str(st.get("border_color") or "#00E5FF")
-    st["border_color"] = bc if bc.startswith("#") else "#" + bc
+    _as_int(st, "float_lift", 14, 0, 120)
+    bc = str(st.get("border_color") or "").strip()
+    if bc.lower() in ("", "auto", "#00e5ff"):
+        # 空 / auto = 跟随图标主色；旧版写死的青色默认值一并迁移
+        st["border_color"] = ""
+    else:
+        st["border_color"] = bc if bc.startswith("#") else "#" + bc
 
     raw_rules = cfg.get("rules")
     if not isinstance(raw_rules, list):

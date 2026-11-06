@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 
-from .coords import ui_scale
+from .coords import ui_scale, ui_zoom
 from .live_window import LiveWindow, normalize_mode
 
 
@@ -47,6 +47,18 @@ def pick_position(rect, win_w, win_h, offset):
     return (round(cx), round(cy))
 
 
+def snapshot_position(rect, lift: int, s: float):
+    """快照贴图位置：x 对齐源区域，y 上浮 lift，且不越出屏幕上沿。
+
+    留这么一个纯函数是为了离屏自检能直接验「浮起了多少」。
+    """
+    y = round(rect.y / s) - max(0, lift)
+    screens = list(QGuiApplication.screens())
+    if screens:
+        y = max(min(sc.geometry().top() for sc in screens), y)
+    return (round(rect.x / s), y)
+
+
 class WindowManager(QObject):
     count_changed = Signal(int)
 
@@ -58,6 +70,8 @@ class WindowManager(QObject):
         self._restore = []
         self._next_id = 1
         self._last_text = ""
+        # AppController 注入：贴图右键「在原图上继续标注」的回调
+        self.reedit_handler = None
         service.result_ready.connect(self._dispatch_result, Qt.QueuedConnection)
         service.progress_changed.connect(self._dispatch_progress, Qt.QueuedConnection)
 
@@ -76,14 +90,17 @@ class WindowManager(QObject):
         win_h = max(1, round(frame["height"] * float(st["default_zoom"]) / s))
 
         if mode == "snapshot" and bool(st.get("place_at_source", True)):
-            # 画面已定格，直接贴在源区域原位，像把屏幕「揭」下来一样
-            pos = (round(rect.x / s), round(rect.y / s))
+            # 画面已定格。比源区域略微上浮一点，露出下沿的原画面，
+            # 一眼能看出这是「浮起来的贴图」而不是屏幕本身。
+            lift = round(max(0, int(st.get("float_lift", 14))) * ui_zoom())
+            pos = snapshot_position(rect, lift, s)
         else:
             pos = pick_position(rect, win_w, win_h, int(st.get("source_offset", 24)))
 
         window = LiveWindow(wid, frame, self.cfg, pos, rect, self._service)
         window.before_capture = self.hide_all
         window.after_capture = self.show_all
+        window.on_reedit = self.reedit_handler
         window.closed.connect(self._on_closed)
         self._windows[wid] = window
 

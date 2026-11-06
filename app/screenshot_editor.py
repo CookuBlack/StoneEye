@@ -22,14 +22,15 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFont, QFontMetrics, QGuiApplication, QImage, QPainter, QPen,
-    QPixmap, QBrush,
+    QColor, QFont, QFontMetrics, QGuiApplication, QImage, QLinearGradient,
+    QPainter, QPen, QPixmap, QBrush,
 )
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from .brand import brand_qcolor, draw_selection_frame
 from .capture_toolbar import CaptureToolbar, OptionsBar, StickerPicker
 from .capture_icons import CLICK_TOOLS, DRAW_TOOLS
 from .coords import to_logical, to_physical, ui_scale, ui_zoom
@@ -238,6 +239,53 @@ class ScreenshotEditor(QWidget):
         self._picker.picked.connect(self._on_sticker)
 
     # ---------- 对外 ----------
+    @classmethod
+    def for_image(cls, pm: QPixmap, cfg=None, parent=None):
+        """用一张现成的图开二次编辑：不抓屏，深色编辑台居中，选区正好是这张图。
+
+        「确定」之后手里只有贴图的成品图（原画面 + 上一次的手绘标注），
+        没有整屏可以冻结。这里造一张虚拟桌面尺寸的画布把图居中放上去，
+        其余全部复用原来的坐标、撤销栈和合成链路；输出会缩回原分辨率，
+        回写贴图时尺寸不会变。
+        """
+        geom = _virtual_geometry()
+        # _screen_pm / _crop 走物理像素，窗口 / _sel 走逻辑像素，两者差一个
+        # ui_scale()。画布必须按物理尺寸建，否则缩放屏上框和底图会错开。
+        s = ui_scale()
+        W = max(1, round(geom.width() * s))
+        H = max(1, round(geom.height() * s))
+        canvas = QPixmap(W, H)
+        painter = QPainter(canvas)
+        grad = QLinearGradient(0, 0, 0, H)
+        grad.setColorAt(0.0, QColor(24, 28, 38))
+        grad.setColorAt(1.0, QColor(11, 13, 18))
+        painter.fillRect(canvas.rect(), QBrush(grad))
+        painter.setPen(QPen(QColor(255, 255, 255, 7), 1.0))
+        step = max(16, round(48 * s))
+        for gx in range(0, W, step):
+            painter.drawLine(gx, 0, gx, H)
+        for gy in range(0, H, step):
+            painter.drawLine(0, gy, W, gy)
+
+        max_w = max(120, W - round(120 * s))
+        max_h = max(120, H - round(220 * s))
+        k = min(1.0, max_w / max(1, pm.width()),
+                max_h / max(1, pm.height()))
+        src = pm if k >= 0.999 else pm.scaled(
+            max(1, round(pm.width() * k)), max(1, round(pm.height() * k)),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        x, y = (W - src.width()) // 2, (H - src.height()) // 2
+        painter.drawPixmap(x, y, src)
+        painter.end()
+
+        fx, fy = to_physical(geom.left(), geom.top(), 1, 1)[:2]
+        full = Rect(fx, fy, W, H)
+        sel = Rect(fx + x, fy + y, src.width(), src.height())
+        ed = cls(canvas, full, sel, cfg, parent)
+        ed._export_size = (pm.width(), pm.height())
+        ed._is_reedit = True
+        return ed
+
     def show_editor(self):
         """把编辑态摆上屏幕（不进局部事件循环，自检脚本也走这条真实路径）。"""
         self.show()
@@ -572,14 +620,17 @@ class ScreenshotEditor(QWidget):
                 p.restore()
             self._draw_annotations(p)
 
-        p.setPen(QPen(QColor(0, 229, 255), 1.5))
-        p.setBrush(Qt.NoBrush)
-        p.drawRect(QRectF(s).adjusted(0.5, 0.5, -0.5, -0.5))
+        draw_selection_frame(p, QRectF(s).adjusted(0.5, 0.5, -0.5, -0.5),
+                             width=2.6)
         self._paint_tip(p)
 
     def _paint_tip(self, p):
-        label = ("长图已生成 · 点 ✔ 完成 / ⬇ 保存" if self._long_pm is not None
-                 else TIP)
+        if getattr(self, "_is_reedit", False):
+            label = "继续标注   ·   Ctrl+Z 撤销   ·   Enter 写回原贴图   ·   Esc 取消"
+        elif self._long_pm is not None:
+            label = "长图已生成 · 点 ✔ 完成 / ⬇ 保存"
+        else:
+            label = TIP
         f = QFont()
         f.setPointSize(9)
         f.setBold(True)
@@ -591,9 +642,15 @@ class ScreenshotEditor(QWidget):
         y = self._sel.top() - h - 6
         if y < 4:
             y = min(self._sel.bottom() + 6, self.height() - h - 4)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(18, 20, 26, 215))
+        accent = brand_qcolor()
+        rim = QColor(accent)
+        rim.setAlpha(90)
+        p.setPen(QPen(rim, 1.0))
+        p.setBrush(QColor(18, 20, 26, 222))
         p.drawRoundedRect(QRectF(x, y, w, h), 6, 6)
+        p.setPen(Qt.NoPen)
+        p.setBrush(accent)
+        p.drawEllipse(QRectF(x + 7, y + h / 2 - 2, 4, 4))
         p.setPen(QColor(235, 245, 255))
         p.drawText(QRectF(x, y, w, h), Qt.AlignCenter, label)
 
@@ -867,12 +924,17 @@ class ScreenshotEditor(QWidget):
 
     def _compose(self) -> QPixmap:
         out = self._compose_base()
-        if self._long_pm is not None or not self._items:
-            return out
-        p = QPainter(out)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        p.setViewport(QRect(0, 0, out.width(), out.height()))
-        p.setWindow(self._sel)
-        self._draw_annotations(p)
-        p.end()
+        if not (self._long_pm is not None or not self._items):
+            p = QPainter(out)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setViewport(QRect(0, 0, out.width(), out.height()))
+            p.setWindow(self._sel)
+            self._draw_annotations(p)
+            p.end()
+        # 二次编辑里大图会在编辑台上等比缩小，导出时缩回原始分辨率，
+        # 回写贴图才不会悄悄改掉尺寸
+        size = getattr(self, "_export_size", None)
+        if size and (out.width(), out.height()) != size:
+            out = out.scaled(size[0], size[1], Qt.IgnoreAspectRatio,
+                             Qt.SmoothTransformation)
         return out

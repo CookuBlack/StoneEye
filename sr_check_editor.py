@@ -195,6 +195,69 @@ check("拼接高度 = 300 + 位移", abs(st.shape[0] - (300 + dy)) <= 4, st.shap
 check("拼接内容对得上", np.abs(
     st[-dy:].astype(int) - f2[-dy:].astype(int)).mean() < 1.0)
 
+# ---- 4.5 品牌色 / 上浮 / 二次编辑 ----
+print("\n# 4.5 品牌色 / 上浮 / 二次编辑")
+from app.brand import FALLBACK_HEX, brand_hex, brand_qcolor, draw_selection_frame
+from app.config_manager import ConfigManager
+from app.window_manager import snapshot_position
+
+hexv = brand_hex()
+check("图标主色是合法 #RRGGBB",
+      len(hexv) == 7 and hexv.startswith("#"), hexv)
+c = brand_qcolor()
+check("主色取自图标蓝色亮部",
+      c.isValid() and c.blue() > c.red() + 40,
+      (c.red(), c.green(), c.blue()))
+check("图标缺失时回退色可用", QColor(FALLBACK_HEX).isValid())
+
+frame_pm = QPixmap(120, 80)
+frame_pm.fill(QColor(255, 255, 255))
+fp = QPainter(frame_pm)
+draw_selection_frame(fp, QRectF(10, 10, 100, 60), width=3.0)
+fp.end()
+fimg = frame_pm.toImage()
+hits = sum(1 for y in range(0, 80, 2) for x in range(0, 120, 2)
+           if (lambda q: q.blue() > 150 and q.blue() > q.red() + 40)(
+               fimg.pixelColor(x, y)))
+check("选区框画上主色描边 + 四角把手", hits > 30, hits)
+
+defaults = ConfigManager.defaults()["sticker"]
+check("边框色默认跟随图标", defaults["border_color"] == "")
+check("上浮距离默认 14", defaults["float_lift"] == 14)
+check("贴图上浮 14px",
+      snapshot_position(Rect(300, 300, 200, 100), 14, 1.0) == (300, 286))
+check("lift=0 时仍完全原位",
+      snapshot_position(Rect(300, 300, 200, 100), 0, 1.0) == (300, 300))
+
+base = QPixmap(400, 240)
+base.fill(QColor(250, 250, 250))
+bp = QPainter(base)
+bp.setBrush(QColor(220, 30, 30))
+bp.drawRect(0, 0, 40, 40)
+bp.end()
+re = ScreenshotEditor.for_image(base, {})
+check("for_image 标记为二次编辑", re._is_reedit is True)
+check("for_image 记录原始分辨率", re._export_size == (400, 240))
+check("选区与裁剪矩形对齐",
+      re._crop.x() == re._sel.x() and re._crop.width() == re._sel.width())
+ctr = re._sel.center()
+re._items.append(dict(
+    kind="rect", p1=QPoint(ctr.x() - 30, ctr.y() - 20),
+    p2=QPoint(ctr.x() + 30, ctr.y() + 20),
+    color="#4E8DFF", width=4))
+reout = re._compose()
+check("二次编辑输出保持原分辨率",
+      (reout.width(), reout.height()) == (400, 240))
+rimg = reout.toImage()
+check("已有标注仍在原图上",
+      rimg.pixelColor(5, 5).red() > 180 and rimg.pixelColor(5, 5).green() < 80)
+check("底图白底未被染色", rimg.pixelColor(200, 10).red() > 240)
+check("新标注落在正确位置", any(
+    rimg.pixelColor(x, 120).blue() > rimg.pixelColor(x, 120).red() + 30
+    for x in range(120, 290)))
+re.cleanup()
+app.processEvents()
+
 # ---- 5. 收尾 ----
 print("\n# 5 结果")
 ed._finish("done", out)

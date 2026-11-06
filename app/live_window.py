@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget, QMenu, QFileDialog, QApplication, QMessageBox, QToolTip,
 )
 
+from .brand import brand_hex
 from .coords import ui_scale
 from .rule_engine import cached_qcolor, summarize
 
@@ -529,11 +530,12 @@ class LiveWindow(QWidget):
         w, h = max(1, self.width()), max(1, self.height())
         if w < 4 or h < 4:
             return
-        color = cached_qcolor(self.sticker_cfg.get("border_color"), "#00E5FF")
+        # 配置留空 = 跟随应用图标主色（换图标时边框自动同色系）
+        color = cached_qcolor(self.sticker_cfg.get("border_color") or brand_hex())
         glow = 0.0
         if self._flash_on_create and self._appear_t < 1.2:
             glow = max(0.0, 1.0 - self._appear_t / 1.2)
-        width = 1.0 + 1.5 * glow
+        width = 2.2 + 1.6 * glow
         painter.save()
         painter.setBrush(Qt.NoBrush)
         if glow > 0.02:
@@ -544,10 +546,16 @@ class LiveWindow(QWidget):
                 inset = 1.0 + i * 2.0
                 painter.drawRect(QRectF(inset, inset, w - 2 * inset, h - 2 * inset))
         edge = QColor(color)
-        edge.setAlpha(int(190 + 65 * glow))
-        painter.setPen(QPen(edge, max(1.0, width)))
+        edge.setAlpha(int(205 + 50 * glow))
+        painter.setPen(QPen(edge, max(2.0, width)))
         painter.drawRect(QRectF(width / 2.0, width / 2.0,
                                 w - width, h - width))
+        # 内侧一道极淡高光：窗口上浮之后，靠这道亮边撑出「一层玻璃」的厚度
+        inset = width + 1.5
+        if w > inset * 2 and h > inset * 2:
+            hi = QColor(255, 255, 255, int(48 + 42 * glow))
+            painter.setPen(QPen(hi, 1.0))
+            painter.drawRect(QRectF(inset, inset, w - 2 * inset, h - 2 * inset))
         painter.restore()
 
     def _paint_capture_badge(self, painter: QPainter):
@@ -569,7 +577,8 @@ class LiveWindow(QWidget):
         painter.setPen(QPen(Qt.NoPen))
         painter.setBrush(QColor(14, 18, 24, 214))
         painter.drawRoundedRect(QRectF(x, y, w, h), 5, 5)
-        painter.setPen(cached_qcolor(self.sticker_cfg.get("border_color"), "#00E5FF"))
+        painter.setPen(cached_qcolor(
+            self.sticker_cfg.get("border_color") or brand_hex()))
         painter.drawText(QRectF(x, y, w, h), Qt.AlignCenter, text)
         painter.restore()
 
@@ -806,9 +815,25 @@ class LiveWindow(QWidget):
         if event.button() == Qt.LeftButton:
             self.close()
 
+    def request_reedit(self):
+        """把这张贴图（原画面 + 已有手绘标注）重新送回标注编辑器。
+
+        只转发给 WindowManager 注入的回调，贴图窗口不必反向依赖托盘 /
+        识别服务；回调负责开编辑态、把结果写回本窗口并重新识别。
+        """
+        cb = getattr(self, "on_reedit", None)
+        if cb is None:
+            self._toast("二次标注未就绪")
+            return
+        # 延后一拍：等右键菜单的弹出窗口彻底收起，再开全屏编辑态，
+        # 否则菜单的嵌套事件循环会和编辑器的局部事件循环抢焦点
+        QTimer.singleShot(0, lambda: cb(self))
+
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         menu.setStyleSheet(MENU_QSS)
+        menu.addAction("在原图上继续标注", lambda: self.request_reedit())
+        menu.addSeparator()
         if self.mode == "snapshot":
             menu.addAction("重新截取源区域", lambda: self.recapture())
             menu.addAction("切换为实时刷新", lambda: self.set_mode("live"))

@@ -74,6 +74,7 @@ class AppController(QObject):
 
         self.service = RecognitionService(self.cfg, self)
         self.manager = WindowManager(self.service, self.cfg, self)
+        self.manager.reedit_handler = self.reedit_window
         self.service.worker_error.connect(self._on_worker_error)
 
         self._build_tray()
@@ -211,7 +212,7 @@ class AppController(QObject):
         if window.mode == "snapshot":
             self._notify(
                 "截图贴图已生成",
-                "画面已定格在框选那一刻，切屏不再变化；右键可重新截取 / 切换实时刷新",
+                "画面已定格在框选那一刻；右键贴图可「在原图上继续标注」",
                 3500,
             )
         else:
@@ -219,6 +220,44 @@ class AppController(QObject):
                 "实时区域已建立",
                 "窗口已错开源区域并持续刷新；请把窗口留在源区域之外。", 3500,
             )
+
+    def reedit_window(self, window):
+        """贴图右键「在原图上继续标注」：编辑完写回同一张贴图，不新建窗口。
+
+        底图取 window.pixmap（原画面 + 上一次手绘标注），不含运行时的
+        OCR 高亮 —— 高亮是叠加层，烤进底图会导致下次识别重复描一遍。
+        """
+        if (self._selecting or window is None
+                or getattr(window, "_closed_emitted", False)):
+            return
+        self._selecting = True
+        editor = None
+        try:
+            self.manager.hide_all()
+            base = window.pixmap.copy()
+            if base.isNull():
+                return
+            editor = ScreenshotEditor.for_image(base, self.cfg)
+            self._notify("继续标注",
+                         "在已有标注上继续画；完成后会写回这张贴图", 2600)
+            outcome = editor.exec()
+            action = (outcome or {}).get("action", "cancel")
+            pm = (outcome or {}).get("pixmap")
+            if action == "cancel" or pm is None or pm.isNull():
+                return
+            frame = make_frame(window.window_id, window.frame_id + 1,
+                               pixmap_to_pil(pm))
+            window.update_frame(frame, allow_frozen=True)
+            window.request_recognize(quiet=True)
+            self._notify("标注已写回贴图",
+                         "在已有标注上继续画完了；右键还能再编辑", 3200)
+        except Exception as exc:
+            self._notify("二次标注失败", str(exc), 6000)
+        finally:
+            if editor is not None:
+                editor.cleanup()
+            self.manager.show_all()
+            self._selecting = False
 
     # ---------- 托盘动作 ----------
     def reload_config(self):

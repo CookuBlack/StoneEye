@@ -17,7 +17,7 @@ sys.path.insert(0, ROOT)
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QMouseEvent,
-                           QPainter, QPixmap)
+                           QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
@@ -121,6 +121,46 @@ def composite(widget, out, bg=(236, 238, 242)):
     print("saved", out, canvas.width(), canvas.height())
 
 
+def composite_on(widget, out, background):
+    """把透明遮罩层叠到一张真实底图上（框选预览用）。
+
+    QWidget.grab() 会把 CompositionMode_Clear 挖出来的洞填成不透明白，
+    真机上那块是透明、直接透出桌面的；预览里要手动把洞再抠透明一次，
+    否则看起来像选区内容被一块白板盖住了。
+    """
+    pm = widget.grab()
+    active = getattr(widget, "_active_rect", lambda: None)()
+    if active is not None:
+        r = active.translated(-widget._offset.x(), -widget._offset.y())
+        m = QPainter(pm)
+        m.setCompositionMode(QPainter.CompositionMode_Clear)
+        # 只抠内部：外沿 6px 留着，那是画在挖空之后的边框 / 发光 / 把手
+        m.fillRect(r.adjusted(6, 6, -6, -6), QColor(0, 0, 0, 0))
+        m.end()
+    canvas = QPixmap(pm.size())
+    canvas.fill(QColor(236, 238, 242))
+    p = QPainter(canvas)
+    p.drawPixmap(0, 0, background)
+    p.drawPixmap(0, 0, pm)
+    p.end()
+    canvas.save(out)
+    print("saved", out, canvas.width(), canvas.height())
+
+
+def composite_with_children(ed, out, bg=(236, 238, 242)):
+    """编辑态全屏窗口 + 浮在它上面的工具条 / 选项条，合成一张。"""
+    canvas = QPixmap(ed.size())
+    canvas.fill(QColor(*bg))
+    p = QPainter(canvas)
+    p.drawPixmap(0, 0, ed.grab())
+    for w in (ed._options, ed._toolbar):
+        if w is not None and w.isVisible():
+            p.drawPixmap(w.pos(), w.grab())
+    p.end()
+    canvas.save(out)
+    print("saved", out, canvas.width(), canvas.height())
+
+
 def main():
     base = fake_desktop()
     full = Rect(0, 0, W, H)
@@ -184,6 +224,42 @@ def main():
     print("saved", os.path.join(OUT, "editor_result.png"))
     ed._hide_children()
     ed.hide()
+
+    # 框选层：模拟一次拖拽，叠到假桌面上看新的「图标主色 + 加粗 + 四角把手」
+    from app.region_selector import RegionSelector
+    rs = RegionSelector()
+    rs.setGeometry(0, 0, W, H)
+    rs._offset = QPoint(0, 0)
+    rs._origin = QPoint(150, 140)
+    rs._current = QPoint(1050, 580)
+    rs._dragging = True
+    rs.show()
+    pump(120)
+    composite_on(rs, os.path.join(OUT, "selection.png"), base)
+    rs.hide()
+
+    # 二次编辑：拿一块「已有红色标注」的成品图，在深色编辑台上继续画绿框
+    prev = base.copy(QRect(110, 120, 700, 380))
+    pp = QPainter(prev)
+    pp.setPen(QPen(QColor("#F2645B"), 4))
+    pp.drawRect(QRectF(30, 30, 240, 70))
+    pp.end()
+    re = ScreenshotEditor.for_image(prev, {})
+    re.show()
+    re._place_children()
+    re._show_child(re._toolbar)
+    re._set_tool("rect")
+    ctr = re._sel.center()
+    re._items.append(dict(
+        kind="rect", p1=QPoint(ctr.x() - 130, ctr.y() - 55),
+        p2=QPoint(ctr.x() + 130, ctr.y() + 55),
+        color="#4FD07A", width=4))
+    re.update()
+    pump(220)
+    composite_with_children(re, os.path.join(OUT, "editor_reedit.png"))
+    re._hide_children()
+    re.hide()
+    re.cleanup()
 
 
 if __name__ == "__main__":

@@ -84,18 +84,21 @@ def main():
     bar, opt, picker = ed._toolbar, ed._options, ed._picker
     results = []
 
-    def children():
-        return [("工具条", bar), ("选项条", opt), ("表情板", picker),
-                ("OCR面板", ed._ocr_panel)]
+    def children(target=None):
+        e = target or ed
+        return [("工具条", e._toolbar), ("选项条", e._options),
+                ("表情板", e._picker), ("OCR面板", e._ocr_panel)]
 
-    def probe(tag):
+    def probe(tag, target=None):
+        e = target or ed
+        eh = hwnd(e)
         ok = True
         detail = []
-        known = {ed_h: "编辑器"}
-        for name, w in children():
+        known = {eh: "编辑器"}
+        for name, w in children(e):
             if w is not None and w.isVisible():
                 known[hwnd(w)] = name
-        for name, w in children():
+        for name, w in children(e):
             if w is None or not w.isVisible():
                 continue
             c = w.geometry().center()
@@ -104,8 +107,8 @@ def main():
             owner = int(u.GetWindow(hwnd(w), GW_OWNER) or 0) & 0xFFFFFFFFFFFFFFFF
             detail.append("%s:%s%s" % (
                 name, "OK" if good else "被「%s」遮挡" % known.get(h, title(h)),
-                "" if owner == ed_h else "(owner 丢失)"))
-            if not good or owner != ed_h:
+                "" if owner == eh else "(owner 丢失)"))
+            if not good or owner != eh:
                 ok = False
         print("%-20s %s" % (tag, "  ".join(detail)))
         return ok
@@ -173,6 +176,27 @@ def main():
     ed._hide_children()
     ed.hide()
     ed.cleanup()
+    pump(app, 120)
+
+    # 7) 二次编辑：用一张现成的图开编辑态，真实窗口走一遍（不进局部事件循环）
+    prev = QPixmap(420, 260)
+    prev.fill(QColor(245, 245, 245))
+    re = ScreenshotEditor.for_image(prev, {})
+    re.show_editor()
+    pump(app, 250)
+    results.append(("二次编辑初始", probe("二次编辑初始", re)))
+    u.SetForegroundWindow(hwnd(re))
+    re.activateWindow()
+    pump(app, 220)
+    results.append(("二次编辑激活后", probe("二次编辑激活后", re)))
+    out = re._compose()
+    size_ok = (out.width(), out.height()) == (420, 260)
+    print("%-20s 输出 %dx%d %s" % (
+        "二次编辑合成", out.width(), out.height(), "OK" if size_ok else "尺寸错"))
+    results.append(("二次编辑合成", size_ok))
+    re._hide_children()
+    re.hide()
+    re.cleanup()
     pump(app, 120)
 
     bad = [name for name, ok in results if not ok]

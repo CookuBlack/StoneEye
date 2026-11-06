@@ -53,7 +53,8 @@
     "place_at_source": true,
     "source_offset": 24,
     "show_border": true,
-    "border_color": "#00E5FF",
+    "border_color": "",
+    "float_lift": 14,
     "flash_on_create": true
   },
   "rules": [
